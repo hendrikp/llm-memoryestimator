@@ -91,7 +91,10 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `updateMemBar()` — renders **two separate bars stacked vertically**: `memBarVram`
   (VRAM=blue) above `memBarRam` (RAM=green), each scaled to its own capacity, each with
   a trailing headroom segment and an OVER warning in its used/cap readout
-  (`memVramCap` / `memRamCap`, e.g. `VRAM: 12.3 / 24 GB`). Also renders
+  (`memVramCap` / `memRamCap`, e.g. `VRAM: 12.3 / 24 GB`). When a bar exceeds
+  its capacity, the over-budget portion (from the cap mark to the end of the
+  used region) gets a striped red overlay (`.mem-seg.over`, absolutely
+  positioned inside the bar). Also renders
   the model badge, the auto-estimate labels (total size per area) and the slider %
   readouts (`est*PctVal`).
 

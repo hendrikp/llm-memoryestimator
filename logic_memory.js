@@ -202,6 +202,19 @@
             makeSeg(rBar, rFree, rScale, "empty", "free", "RAM headroom: " + rFree.toFixed(1) + " GB");
         }
 
+        // Striped red overlay on the part of a bar that exceeds its capacity.
+        function addOverOverlay(bar, used, scale, cap, name) {
+            if (used <= cap) return;
+            var d = document.createElement("div");
+            d.className = "mem-seg over";
+            d.style.left = (cap / scale * 100) + "%";
+            d.style.width = ((used - cap) / scale * 100) + "%";
+            d.title = name + " over budget by " + (used - cap).toFixed(1) + " GB";
+            bar.appendChild(d);
+        }
+        addOverOverlay(vBar, vramUsed, vScale, vramCap, "VRAM");
+        addOverOverlay(rBar, ramUsed, rScale, ramCap, "RAM");
+
         var vOver = vramUsed > vramCap;
         var rOver = ramUsed > ramCap;
         el("memVramCap").innerHTML = "VRAM: " + vramUsed.toFixed(1) + " / " + vramCap + " GB" + (vOver ? ' <span class="over">OVER</span>' : "");

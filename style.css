@@ -153,6 +153,12 @@ header h1 span { color: var(--accent); }
 .mem-seg.buf { background: linear-gradient(90deg, #1a5a5a, #2a8a8a); }
 .mem-seg.cublas { background: linear-gradient(90deg, #7a2a4a, #b04a7a); }
 .mem-seg.batch { background: linear-gradient(90deg, #8a6a1a, #c09a2a); }
+.mem-seg.over {
+    position: absolute; top: 0; bottom: 0; height: auto;
+    background: repeating-linear-gradient(45deg, rgba(248, 81, 73, 0.55) 0 8px, rgba(248, 81, 73, 0.12) 8px 16px);
+    border-left: 2px solid var(--red);
+    pointer-events: none;
+}
 .mem-legend .swatch.os { background: #9a6a2a; }
 .mem-legend .swatch.rt { background: #6a5a9a; }
 .mem-legend .swatch.buf { background: #2a8a8a; }
