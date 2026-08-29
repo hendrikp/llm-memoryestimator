@@ -17,10 +17,10 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
 | File | Role |
 |------|------|
-| `configtool.html` | Markup only. All form fields, the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic.js`. |
+| `configtool.html` | Markup only. All form fields, the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic_memory.js` then `logic.js` (order matters — `logic.js` calls `MemEst.*`). |
 | `style.css` | All styling. CSS variables live in `:root`. Memory-bar classes are prefixed `mem-*`, system-panel `sys-*`. |
-| `logic.js` | All behavior, wrapped in an IIFE. See function map below. |
-| `logic.js.tmp` | Empty scratch file — safe to delete. |
+| `logic_memory.js` | Memory size estimation + VRAM/RAM bar rendering, wrapped in an IIFE. Exposes `window.MemEst` (`updateMemBar`, `computeEstimates`, `parseModel`, `getCap`). Owns its own `gv`/`ck`/`el` DOM helpers. |
+| `logic.js` | All other behavior, wrapped in an IIFE. See function map below. Calls `MemEst.updateMemBar()` from `updateOutput()`. |
 
 ## How the pieces connect
 
@@ -28,7 +28,8 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   When adding a field: add the `id` in `configtool.html`, then register it in `logic.js`
   (`DEFAULTS`, `FIELD_IDS`, `resetAll`, `clearAll`, and `buildArgs` where it affects output).
 - Any `input`/`change` on a form control fires `updateOutput()`, which regenerates the
-  active tab's script **and** re-renders the memory bars. That is the single refresh path.
+  active tab's script **and** re-renders the memory bars via `MemEst.updateMemBar()`. That
+  is the single refresh path.
 - `currentTab` selects which generator runs (`bat` / `ps1` / `sh` / `json`).
 
 ## Main functions (logic.js)
@@ -45,7 +46,7 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `genBat`, `genPs1`, `genSh`, `genJson` — format `buildArgs()` output. Python was removed.
   `genJson` clamps `ncpu_moe_gb` to ≥ 0 (see gotchas).
 
-**Memory estimation + distribution bars**
+**Memory estimation + distribution bars** (all in `logic_memory.js`, exposed as `window.MemEst`)
 - `quantBytesPerWeight(model)` — bytes/weight from the quant tag in the filename
   (NVFP4/FP4, Q2–Q8, F16/BF16). Drives the scale-down of total size.
 - `parseModel(name)` — extracts `{ totalB, activeB, isMoE }` from the filename.
