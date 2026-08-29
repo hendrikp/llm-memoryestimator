@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>llama.cpp Server Config Generator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span>&#9889;</span> llama.cpp <span>Config Generator</span></h1>
+            <div class="header-actions">
+                <select class="preset-select" id="presetSelect">
+                    <option value="">Apply preset&hellip;</option>
+                    <option value="myconfig">My config</option>
+                    <option value="chat">Chat</option>
+                    <option value="fast">Fast</option>
+                    <option value="quality">Quality</option>
+                    <option value="embed">Embed</option>
+                </select>
+                <button class="btn" id="btnSavePreset">&#128190; Save preset</button>
+                <button class="btn" id="btnLoadPreset">&#128228; Load preset</button>
+                <input type="file" id="presetFile" accept=".json" hidden>
+                <button class="btn" id="btnReset">&#8634; Reset</button>
+                <button class="btn btn-danger" id="btnClear">&#10005; Clear</button>
+            </div>
+        </header>
+
+        <div class="panel sys-panel" style="margin-bottom:20px">
+            <div class="panel-header">
+                <h2>&#128421; Detected System</h2>
+                <button class="btn" id="btnDetect" style="font-size:0.75rem">&#128260; Re-detect</button>
+            </div>
+            <div class="panel-body">
+                <div class="sys-grid">
+                    <div class="sys-item">
+                        <div class="label">GPU</div>
+                        <div class="value unknown" id="sysGpu">Detecting...</div>
+                        <div class="detected" id="sysGpuDetected"></div>
+                    </div>
+                    <div class="sys-item">
+                        <div class="label">Architecture</div>
+                        <div class="value unknown" id="sysGpuArch">&mdash;</div>
+                        <input type="text" id="sysGpuArchManual" placeholder="e.g. Ada, Hopper, RDNA3">
+                    </div>
+                    <div class="sys-item">
+                        <div class="label">VRAM (GB)</div>
+                        <div class="value unknown" id="sysVram">&mdash;</div>
+                        <input type="number" id="sysVramManual" min="0" step="1" placeholder="e.g. 24">
+                        <div class="detected" id="sysVramDetected">browser does not expose VRAM</div>
+                    </div>
+                    <div class="sys-item">
+                        <div class="label">System RAM (GB)</div>
+                        <div class="value unknown" id="sysRam">&mdash;</div>
+                        <input type="number" id="sysRamManual" min="0" step="1" placeholder="e.g. 64">
+                        <div class="detected" id="sysRamDetected"></div>
+                    </div>
+                    <div class="sys-item">
+                        <div class="label">CPU Cores</div>
+                        <div class="value unknown" id="sysCores">&mdash;</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="layout">
+            <div class="panel mem-panel">
+                <div class="panel-header">
+                    <h2>&#128202; Memory Distribution (VRAM / RAM)</h2>
+                    <span class="badge" id="memModelBadge">no model</span>
+                </div>
+                <div class="panel-body">
+                    <div class="mem-rows">
+                        <div class="mem-row">
+                            <div class="mem-row-label vram">VRAM</div>
+                            <div class="mem-bar" id="memBarVram"></div>
+                            <div class="mem-cap"><span id="memVramCap">VRAM: 0 / 0 GB</span></div>
+                        </div>
+                        <div class="mem-row">
+                            <div class="mem-row-label ram">RAM</div>
+                            <div class="mem-bar" id="memBarRam"></div>
+                            <div class="mem-cap"><span id="memRamCap">RAM: 0 / 0 GB</span></div>
+                        </div>
+                    </div>
+                    <div class="mem-legend">
+                        <span class="item"><span class="swatch vram"></span> in VRAM</span>
+                        <span class="item"><span class="swatch ram"></span> in RAM</span>
+                        <span class="item"><span class="swatch os"></span> OS (override)</span>
+                        <span class="item"><span class="swatch rt"></span> Scratch (F&times;P)</span>
+                        <span class="item"><span class="swatch cublas"></span> cuBLAS (override)</span>
+                        <span class="item"><span class="swatch buf"></span> Buf (ubatch, VRAM)</span>
+                        <span class="item"><span class="swatch batch"></span> Batch (RAM)</span>
+                        <span class="item"><span class="swatch empty"></span> headroom</span>
+                    </div>
+
+                    <div class="section-label">Placement (VRAM %) &mdash; sizes auto from model name + quant</div>
+                    <div class="mem-estimates">
+                        <div class="mem-est">
+                            <div class="lbl">Model Layers (non-MoE)</div>
+                            <div class="row"><label>ngl</label><input type="text" id="ngl" value="all" placeholder="all or number"><span class="hint-inline">partial offload</span></div>
+                            <div class="row"><label>VRAM</label><input type="range" id="estLayersPct" min="0" max="100" step="5" value="100"><span class="unit" id="estLayersPctVal">100%</span></div>
+                            <div class="auto" id="autoLayers">auto</div>
+                        </div>
+                        <div class="mem-est">
+                            <div class="lbl">MoE Experts</div>
+                            <div class="row"><label>VRAM</label><input type="range" id="estMoePct" min="0" max="100" step="5" value="100"><span class="unit" id="estMoePctVal">100%</span></div>
+                            <div class="auto" id="autoMoe">auto</div>
+                        </div>
+                        <div class="mem-est">
+                            <div class="lbl">Context (KV cache)</div>
+                            <div class="row"><label>K</label><select id="cacheK"><option value="q4_0" selected>q4_0</option><option value="q8_0">q8_0</option><option value="f16">f16</option></select></div>
+                            <div class="row"><label>V</label><select id="cacheV"><option value="q4_0" selected>q4_0</option><option value="q8_0">q8_0</option><option value="f16">f16</option></select></div>
+                            <div class="row check-row"><input type="checkbox" id="noKvOffload"><label for="noKvOffload">No KV offload</label></div>
+                            <div class="row"><label>VRAM</label><input type="range" id="estCtxPct" min="0" max="100" step="5" value="100"><span class="unit" id="estCtxPctVal">100%</span></div>
+                            <div class="auto" id="ctxVramAmt">&mdash;</div>
+                            <div class="auto" id="autoCtx">auto</div>
+                        </div>
+                        <div class="mem-est">
+                            <div class="lbl">MTP Head</div>
+                            <div class="row"><label>Loc</label><span class="unit">VRAM (only when MTP spec active)</span></div>
+                            <div class="auto" id="autoMtp">auto</div>
+                        </div>
+                        <div class="mem-est">
+                            <div class="lbl">Image Layer (vision)</div>
+                            <div class="row"><label>Loc</label>
+                                <select id="estImgLoc">
+                                    <option value="vram" selected>VRAM</option>
+                                    <option value="ram">RAM</option>
+                                </select>
+                            </div>
+                            <div class="auto" id="autoImg">auto</div>
+                        </div>
+                        <div class="mem-est">
+                            <div class="lbl">Overheads &amp; Factors</div>
+                            <div class="row"><label>OS</label><input type="number" id="osOverhead" value="0.25" min="0" step="0.05"><span class="hint-inline">OS / driver</span></div>
+                            <div class="row"><label>cuBLAS</label><input type="number" id="cublasOverhead" value="0.35" min="0" step="0.05"><span class="hint-inline">cuBLAS workspace</span></div>
+                            <div class="row"><label>SCR&times;P</label><input type="number" id="scratchFactor" value="0.025" min="0" step="0.005"><span class="hint-inline">GB per PB</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Model &amp; Server</h2>
+                    <span class="badge">Required</span>
+                </div>
+                <div class="panel-body">
+                    <div class="field">
+                        <label for="modelPath">Model Path</label>
+                        <input type="text" id="modelPath" placeholder="Qwen3.8-27B-NVFP4-MTP-VERY-LOW.gguf" value="Qwen3.8-27B-NVFP4-MTP-VERY-LOW.gguf">
+                        <span class="hint">filename drives the memory estimate</span>
+                    </div>
+                    <div class="field-group">
+                        <div class="field">
+                            <label for="ctxSize">Context Size (-c)</label>
+                            <input type="number" id="ctxSize" value="64000" min="0" step="1024">
+                        </div>
+                        <div class="field">
+                            <label for="ncpuMoe">MoE &rarr; CPU (-ncpu-moe)</label>
+                            <input type="number" id="ncpuMoe" value="0" min="0" step="0.5">
+                            <span class="hint">GB of MoE experts offloaded to RAM (0 = off)</span>
+                        </div>
+                        <div class="field">
+                            <label for="threads">Threads (-t)</label>
+                            <input type="number" id="threads" value="8" min="1">
+                        </div>
+                        <div class="field">
+                            <label for="loadMode">Load Mode</label>
+                            <select id="loadMode">
+                                <option value="mlock" selected>mlock</option>
+                                <option value="malloc">malloc</option>
+                                <option value="mmap">mmap</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="batchSize">Batch Size</label>
+                            <input type="number" id="batchSize" value="2048" min="512" step="512">
+                            <span class="hint">snaps to a multiple of 512</span>
+                        </div>
+                        <div class="field">
+                            <label for="ubatchSize">UBatch Size</label>
+                            <input type="number" id="ubatchSize" value="512" min="512" step="512">
+                            <span class="hint">snaps to a multiple of 512</span>
+                        </div>
+                        <div class="field">
+                            <label for="host">Host</label>
+                            <input type="text" id="host" value="192.168.2.105">
+                        </div>
+                        <div class="field">
+                            <label for="port">Port</label>
+                            <input type="number" id="port" value="8080" min="1">
+                        </div>
+                        <div class="field">
+                            <label for="parallel">Parallel (-np)</label>
+                            <input type="number" id="parallel" value="1" min="1">
+                        </div>
+                        <div class="field">
+                            <label for="mainGpu">Main GPU</label>
+                            <input type="number" id="mainGpu" value="0" min="0">
+                        </div>
+                        <div class="field">
+                            <label for="tensorSplit">Tensor Split</label>
+                            <input type="text" id="tensorSplit" placeholder="e.g. 8,0,0">
+                        </div>
+                        <div class="field">
+                            <label for="binaryPath">Binary Path</label>
+                            <input type="text" id="binaryPath" value="llama-server.exe">
+                        </div>
+                    </div>
+
+                    <div class="section-label">Environment</div>
+                    <div class="field">
+                        <label for="envVars">Environment Variables</label>
+                        <textarea id="envVars" rows="3" placeholder="LLAMA_NUM_THREADS=16&#10;HSA_OVERRIDE_GFX_VERSION=11.0.0"></textarea>
+                    </div>
+
+                    <div class="section-label">Advanced</div>
+                    <div class="field-group">
+                        <div class="check-row"><input type="checkbox" id="flashAttn" checked><label for="flashAttn">Flash attention (--flash-attn on)</label></div>
+                        <div class="check-row"><input type="checkbox" id="jinja" checked><label for="jinja">Jinja chat template (--jinja)</label></div>
+                        <div class="check-row"><input type="checkbox" id="promptCache"><label for="promptCache">Prompt cache (--prompt-cache)</label></div>
+                        <div class="field">
+                            <label for="promptCachePath">Prompt Cache Path</label>
+                            <input type="text" id="promptCachePath" placeholder="cache.bin">
+                        </div>
+                        <div class="check-row"><input type="checkbox" id="verbose"><label for="verbose">Verbose (-v)</label></div>
+                        <div class="field">
+                            <label for="loraPath">LoRA Adapter</label>
+                            <input type="text" id="loraPath" placeholder="adapter.gguf">
+                        </div>
+                        <div class="field">
+                            <label for="extraArgs">Extra Args</label>
+                            <input type="text" id="extraArgs" placeholder="any additional flags">
+                        </div>
+                    </div>
+
+                    <div class="section-label">Sampling</div>
+                    <div class="field-group">
+                        <div class="field">
+                            <label for="temp">Temperature <span class="val-display" id="tempVal">0.60</span></label>
+                            <input type="range" id="temp" min="0" max="2" step="0.05" value="0.6">
+                        </div>
+                        <div class="field">
+                            <label for="topP">Top-p <span class="val-display" id="topPVal">0.95</span></label>
+                            <input type="range" id="topP" min="0" max="1" step="0.01" value="0.95">
+                        </div>
+                        <div class="field">
+                            <label for="topK">Top-k</label>
+                            <input type="number" id="topK" value="20" min="0">
+                        </div>
+                        <div class="field">
+                            <label for="minP">Min-p <span class="val-display" id="minPVal">0.00</span></label>
+                            <input type="range" id="minP" min="0" max="1" step="0.01" value="0">
+                        </div>
+                        <div class="field">
+                            <label for="presPen">Presence Penalty <span class="val-display" id="presPenVal">0.00</span></label>
+                            <input type="range" id="presPen" min="-2" max="2" step="0.05" value="0">
+                        </div>
+                        <div class="field">
+                            <label for="repPen">Repeat Penalty <span class="val-display" id="repPenVal">1.00</span></label>
+                            <input type="range" id="repPen" min="0.5" max="2" step="0.01" value="1.0">
+                        </div>
+                        <div class="field">
+                            <label for="freqPen">Frequency Penalty <span class="val-display" id="freqPenVal">0.00</span></label>
+                            <input type="range" id="freqPen" min="-2" max="2" step="0.05" value="0">
+                        </div>
+                        <div class="field">
+                            <label for="repLastN">Repeat Last N</label>
+                            <input type="number" id="repLastN" value="64" min="0">
+                        </div>
+                        <div class="field">
+                            <label for="maxTokens">Max Tokens (-n)</label>
+                            <input type="number" id="maxTokens" value="0" min="0">
+                        </div>
+                        <div class="field">
+                            <label for="seed">Seed</label>
+                            <input type="number" id="seed" value="-1">
+                        </div>
+                        <div class="field">
+                            <label for="grammarFile">Grammar File</label>
+                            <input type="text" id="grammarFile" placeholder="grammar.lark">
+                        </div>
+                    </div>
+
+                    <div class="section-label">Reasoning</div>
+                    <div class="field-group">
+                        <div class="field">
+                            <label for="reasoningBudget">Reasoning Budget</label>
+                            <input type="number" id="reasoningBudget" value="1024" min="0">
+                        </div>
+                        <div class="check-row"><input type="checkbox" id="reasoningPreserve" checked><label for="reasoningPreserve">Preserve reasoning (--reasoning-preserve)</label></div>
+                        <div class="field">
+                            <label for="chatKwargs">Chat Template Kwargs</label>
+                            <input type="text" id="chatKwargs" value='{"reasoning_effort":"medium"}' placeholder='{"reasoning_effort":"medium"}'>
+                        </div>
+                    </div>
+
+                    <div class="section-label">Speculative Decoding / MTP</div>
+                    <div class="field-group">
+                        <div class="field">
+                            <label for="specType">Spec Type</label>
+                            <select id="specType">
+                                <option value="" selected>&mdash; none &mdash;</option>
+                                <option value="draft-mtp">draft-mtp</option>
+                                <option value="draft-external">draft-external</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="draftModel">Draft Model</label>
+                            <input type="text" id="draftModel" placeholder="draft.gguf">
+                        </div>
+                        <div class="field">
+                            <label for="specDraftNMax">Draft N Max</label>
+                            <input type="number" id="specDraftNMax" value="6" min="1">
+                        </div>
+                        <div class="field">
+                            <label for="specDraftPMin">Draft P Min</label>
+                            <input type="number" id="specDraftPMin" value="0.75" min="0" max="1" step="0.05">
+                        </div>
+                        <div class="field">
+                            <label for="specTypeK">Spec Type K</label>
+                            <input type="text" id="specTypeK" placeholder="cache type for K">
+                        </div>
+                        <div class="field">
+                            <label for="specTypeV">Spec Type V</label>
+                            <input type="text" id="specTypeV" placeholder="cache type for V">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel output-panel">
+                <div class="panel-header">
+                    <h2>&#128196; Generated Output</h2>
+                    <div style="display:flex; gap:8px">
+                        <button class="btn btn-primary" id="btnCopy">&#128203; Copy</button>
+                        <button class="btn" id="btnDownload">&#11015; Download</button>
+                    </div>
+                </div>
+                <div class="output-tabs">
+                    <div class="output-tab active" data-tab="bat">run-server.bat</div>
+                    <div class="output-tab" data-tab="ps1">run-server.ps1</div>
+                    <div class="output-tab" data-tab="sh">run-server.sh</div>
+                    <div class="output-tab" data-tab="json">config.json</div>
+                </div>
+                <div class="output-content" id="outputContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script src="logic.js"></script>
+</body>
+</html>
