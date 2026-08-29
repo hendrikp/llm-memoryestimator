@@ -46,17 +46,36 @@
         return gv(id) === DEFAULTS[id];
     }
 
-    function roundTo512(v) {
-        if (isNaN(v)) return 512;
-        var r = Math.round(v / 512) * 512;
-        if (r < 512) r = 512;
+    // Batch sizing rules: ubatchSize snaps to a multiple of 32 (min 32);
+    // batchSize must be an exact multiple of the current ubatchSize.
+    function roundToMultiple(v, m, min) {
+        if (isNaN(v)) return min;
+        var r = Math.round(v / m) * m;
+        if (r < min) r = min;
         return r;
+    }
+    function getUbatch() {
+        var v = parseInt(el("ubatchSize").value, 10);
+        return (isNaN(v) || v < 32) ? 32 : v;
     }
     function clampBatch(id) {
         var e = el(id);
         var v = parseFloat(e.value);
-        if (isNaN(v)) { e.value = DEFAULTS[id]; return; }
-        e.value = roundTo512(v);
+        if (id === "ubatchSize") {
+            if (isNaN(v)) v = DEFAULTS.ubatchSize;
+            e.value = roundToMultiple(v, 32, 32);
+            // Keep the batch input and its value consistent with the new ubatch.
+            var b = el("batchSize");
+            b.min = e.value;
+            b.step = e.value;
+            var bv = parseFloat(b.value);
+            b.value = isNaN(bv) ? DEFAULTS.batchSize : roundToMultiple(bv, parseInt(e.value, 10), parseInt(e.value, 10));
+            return;
+        }
+        // batchSize: multiple of the (already clamped) ubatch size.
+        var u = getUbatch();
+        if (isNaN(v)) v = DEFAULTS.batchSize;
+        e.value = roundToMultiple(v, u, u);
     }
 
     // ------------------------------------------------------------------
@@ -165,7 +184,7 @@
             model: gv("modelPath") || null,
             context: parseInt(gv("ctxSize")) || null,
             gpu_layers: gv("ngl") || null,
-            ncpu_moe_gb: Math.max(0, num("ncpuMoe") || 0),
+            ncpu_moe_experts: Math.max(0, num("ncpuMoe") || 0),
             threads: parseInt(gv("threads")) || null,
             server: {
                 host: gv("host") || null,

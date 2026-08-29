@@ -40,11 +40,16 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `isDefault(id)` — compares current value against `DEFAULTS`.
 - `buildArgs()` — assembles the ordered arg list + env lines + chat kwargs. This is the
   single source of truth for what gets emitted.
-- `roundTo512` / `clampBatch` — batch/ubatch sizes snap to a multiple of 512 (min 512).
+- `roundToMultiple` / `clampBatch` — `ubatchSize` snaps to a multiple of 32 (min 32);
+  `batchSize` must be an exact multiple of the current `ubatchSize` (min = ubatch).
+  Clamping ubatch also re-clamps batch and updates the batch input's `min`/`step`
+  attributes to track the ubatch value.
 
 **Script generators** (each returns the full text for the active tab)
 - `genBat`, `genPs1`, `genSh`, `genJson` — format `buildArgs()` output. Python was removed.
-  `genJson` clamps `ncpu_moe_gb` to ≥ 0 (see gotchas).
+  `genJson` clamps `ncpu_moe_experts` to ≥ 0 (see gotchas). Note `ncpuMoe`
+  is a **count of experts** (not GB) and lives in the MoE Experts card of the
+  memory panel (like `ctxSize` in the KV cache card), not in the Model panel.
 
 **Memory estimation + distribution bars** (all in `logic_memory.js`, exposed as `window.MemEst`)
 - `quantBytesPerWeight(model)` — bytes/weight from the quant tag in the filename
