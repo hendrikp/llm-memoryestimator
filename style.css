@@ -120,8 +120,11 @@ header h1 span { color: var(--accent); }
 .mem-rows { display: flex; flex-direction: column; gap: 12px; }
 .mem-row {
     display: grid; grid-template-columns: 44px 1fr;
-    gap: 8px; align-items: center;
+    grid-template-rows: auto auto;
+    column-gap: 8px; row-gap: 4px; align-items: center;
 }
+.mem-row-label { grid-column: 1; grid-row: 1; }
+.mem-bar { grid-column: 2; grid-row: 1; }
 .mem-row-label {
     font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.6px; text-align: center;
@@ -190,7 +193,7 @@ header h1 span { color: var(--accent); }
 .mem-est .row.check-row label { font-size: 0.72rem; cursor: pointer; width: auto; flex: 1 1 auto; }
 .mem-est .auto { font-size: 0.62rem; color: var(--text-secondary); font-style: italic; }
 .mem-est .auto.on { color: var(--accent); }
-.mem-cap { font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px; font-family: var(--mono); }
+.mem-cap { grid-column: 2; grid-row: 2; font-size: 0.7rem; color: var(--text-secondary); font-family: var(--mono); text-align: center; white-space: nowrap; }
 .mem-cap .over { color: var(--red); font-weight: 700; }
 ::selection { background: var(--accent-dim); }
 ::-webkit-scrollbar { width: 7px; height: 7px; }
