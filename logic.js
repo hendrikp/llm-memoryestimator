@@ -419,6 +419,7 @@
     // System detection (WebGL GPU name only — display, not overridable).
     // ------------------------------------------------------------------
     var GPU_ARCHS = [
+        [/RTX 50|GeForce 50/i, "Blackwell"],
         [/RTX 40|GeForce 40/i, "Ada"],
         [/RTX 30|GeForce 30/i, "Ampere"],
         [/RTX 20|GeForce 20/i, "Turing"],
