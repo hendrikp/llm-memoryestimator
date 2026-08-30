@@ -87,8 +87,13 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   to make the KV cache fully fit in VRAM.
 - **Layout inside the mem-est grid:** each area card now contains its related controls
   inline: `ngl` sits above the Model Layers slider; `cacheK`/`cacheV` selects and the
-  `noKvOffload` checkbox sit above the KV cache slider. These were moved out of the
-  Model & Server / Advanced panels so the user sees them in context.
+  `noKvOffload` checkbox sit above the KV cache slider; the `specType` select sits in
+  the MTP Head card (above the Loc row) — it was moved out of the Speculative
+  Decoding / MTP section of the Model panel so the spec choice is visible right next
+  to where the MTP head is placed. These were moved out of the
+  Model & Server / Advanced panels so the user sees them in context. (The MTP Head
+  card is the placement area for the MTP head: `specType` select, a Loc row showing
+  it is always in VRAM when a spec type is active, and the `autoMtp` estimate.)
 - **`noKvOffload` interaction:** when `--no-kv-offload` is checked, the KV cache is
   forced to 100 % RAM (0 % VRAM) regardless of `estCtxPct`, and the `estCtxPct` slider
   is disabled (greyed out, snapped to 0 %). Unchecking `noKvOffload` re-enables the

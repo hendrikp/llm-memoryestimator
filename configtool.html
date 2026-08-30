@@ -121,6 +121,13 @@
                         </div>
                         <div class="mem-est">
                             <div class="lbl">MTP Head</div>
+                            <div class="row"><label for="specType">Spec</label>
+                                <select id="specType">
+                                    <option value="" selected>&mdash; none &mdash;</option>
+                                    <option value="draft-mtp">draft-mtp</option>
+                                    <option value="draft-external">draft-external</option>
+                                </select>
+                            </div>
                             <div class="row"><label>Loc</label><span class="unit">VRAM (only when MTP spec active)</span></div>
                             <div class="auto" id="autoMtp">auto</div>
                         </div>
@@ -293,14 +300,6 @@
 
                     <div class="section-label">Speculative Decoding / MTP</div>
                     <div class="field-group">
-                        <div class="field">
-                            <label for="specType">Spec Type</label>
-                            <select id="specType">
-                                <option value="" selected>&mdash; none &mdash;</option>
-                                <option value="draft-mtp">draft-mtp</option>
-                                <option value="draft-external">draft-external</option>
-                            </select>
-                        </div>
                         <div class="field">
                             <label for="draftModel">Draft Model</label>
                             <input type="text" id="draftModel" placeholder="draft.gguf">
