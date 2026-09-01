@@ -1,8 +1,8 @@
-# configtool — llama.cpp Server Config Generator
+# configtool — llama.cpp Memory Distribution Estimator
 
-A single-page HTML tool that builds `llama-server` launch scripts (.bat / .ps1 / .sh / JSON)
-from a form, plus a rough VRAM/RAM memory-usage estimator with **two stacked distribution
-bars** (VRAM on top, RAM below).
+A single-page HTML tool whose **main purpose** is a rough VRAM/RAM memory-usage
+estimator with **two stacked distribution bars** (VRAM on top, RAM below),
+plus a `llama-server` launch-script builder (.bat / .ps1 / .sh / JSON) from a form.
 
 Static site — no build step, no dependencies. Open `configtool.html` in a browser
 (`file://` works; serving over `http://` only matters for clipboard on some setups).
