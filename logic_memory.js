@@ -80,7 +80,7 @@
         var layers = estimateLayers(model.totalB || 8);
         var kvDim = estimateKVDim(); // n_kv_heads × head_dim (GQA), not full hidden dim
         var ctxGB = ctx > 0
-            ? (2 * layers * kvDim * ctx * kvBytesFactor(gv("cacheK"))) / 1e9
+            ? (layers * kvDim * ctx * (kvBytesFactor(gv("cacheK")) + kvBytesFactor(gv("cacheV")))) / 1e9
             : 0;
 
         // MTP head only counts when a MTP spec/draft is actually selected;
