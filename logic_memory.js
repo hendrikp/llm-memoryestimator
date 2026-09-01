@@ -60,12 +60,20 @@
         return 512;
     }
 
+    // Bytes per KV value for each -ctk/-ctv type (order-of-magnitude, incl.
+    // per-block scale overhead; unknown values fall back to f16).
     function kvBytesFactor(cacheType) {
         switch (cacheType) {
-            case "f16": return 2;
-            case "q8_0": return 1.0625;
-            case "q4_0":
-            default: return 0.5625;
+            case "f32": return 4;
+            case "f16":
+            case "bf16": return 2;
+            case "q8_0": return 1.0625; // 32 int8 + 1 scale byte per 32 values
+            case "q4_0": return 0.5625; // 16 nibbles + 1 scale byte per 32
+            case "q4_1": return 0.625;  // 16 nibbles + delta/min scales per 32
+            case "iq4_nl": return 0.5;   // 16 nibbles, no scales per 32
+            case "q5_0": return 0.6875;  // 16 nibbles + 4 high bits + scale per 32
+            case "q5_1": return 0.75;    // 16 nibbles + 4 high bits + delta/min per 32
+            default: return 2;           // f16
         }
     }
 
@@ -83,8 +91,8 @@
             ? (layers * kvDim * ctx * (kvBytesFactor(gv("cacheK")) + kvBytesFactor(gv("cacheV")))) / 1e9
             : 0;
 
-        // MTP head only counts when a MTP spec/draft is actually selected;
-        // with spec type "none" it takes no space in this estimate.
+        // Drafter (MTP head or external draft model) only counts when a spec/draft
+        // type is actually selected; with spec type "none" it takes no space.
         var mtpGB = (gv("specType") && /MTP/i.test(gv("modelPath"))) ? activeGB * 0.05 : 0;
         var imgGB = /mmproj/i.test(gv("modelPath")) ? 1.5 : 0;
 
@@ -103,6 +111,60 @@
     function getCap(id, fallback) {
         var v = parseFloat(gv(id));
         return isNaN(v) ? fallback : v;
+    }
+
+    // ------------------------------------------------------------------
+    // Area definitions — the single source of truth for how each area
+    // looks. `cls` is used both for the bar segment (`.mem-seg.<cls>`) and
+    // the legend swatch (`.swatch.<cls>`), so the color is defined exactly
+    // once in the CSS. The legend is generated from this table; no separate
+    // per-area legend definitions exist.
+    // Color is per-area: an area looks the same in the VRAM and RAM bars.
+    // ------------------------------------------------------------------
+    var AREAS = {
+        layers:  { short: "MODEL",  cls: "layers", legend: "Model" },
+        moe:     { short: "MOE",    cls: "moe",    legend: "MoE Experts" },
+        ctx:     { short: "KV",     cls: "ctx",    legend: "KV Cache" },
+        mtp:     { short: "Drafter",cls: "mtp",    legend: "Drafter (spec)" },
+        img:     { short: "IMG",    cls: "img",    legend: "Image proj." },
+        os:      { short: "OS",     cls: "os",     legend: "OS (override)" },
+        scratch: { short: "SCR",    cls: "rt",     legend: "Scratch (F×P)" },
+        cublas:  { short: "cuBLAS", cls: "cublas", legend: "cuBLAS (override)" },
+        ubatch:  { short: "UBatch", cls: "buf",    legend: "UBatch (VRAM)" },
+        batch:   { short: "BATCH",  cls: "batch",  legend: "Batch (RAM)" }
+    };
+    // Single order shared by the bars and the legend: segments appear in the
+    // same order in the VRAM bar, the RAM bar, and the legend below them.
+    var BAR_ORDER = ["os", "scratch", "cublas", "ubatch", "layers", "moe", "ctx", "mtp", "img", "batch"];
+
+    function makeSwatch(cls) {
+        // Carries the `mem-seg <cls>` classes so the swatch picks up the exact
+        // same color definition as the bar segment (single source of truth).
+        var s = document.createElement("span");
+        s.className = "swatch mem-seg " + cls;
+        return s;
+    }
+
+    function buildLegend() {
+        var lg = el("memLegend");
+        if (!lg) return;
+        lg.innerHTML = "";
+        BAR_ORDER.forEach(function(k) {
+            var a = AREAS[k];
+            var item = document.createElement("span");
+            item.className = "item";
+            item.appendChild(makeSwatch(a.cls));
+            item.appendChild(document.createTextNode(a.legend));
+            lg.appendChild(item);
+        });
+        // Non-area entries (bar state, not an area).
+        [["empty", "free"], ["over", "over budget"]].forEach(function(e) {
+            var item = document.createElement("span");
+            item.className = "item";
+            item.appendChild(makeSwatch(e[0]));
+            item.appendChild(document.createTextNode(e[1]));
+            lg.appendChild(item);
+        });
     }
 
     function updateMemBar() {
@@ -125,8 +187,8 @@
             layers: split(auto.layers, pct("estLayersPct")),
             moe: split(auto.moe, pct("estMoePct")),
             ctx: split(auto.ctx, ck("noKvOffload") ? 0 : pct("estCtxPct")),
-            mtp: { vram: auto.mtp.vram + auto.mtp.ram, ram: 0 }, // MTP head always in VRAM
-            img: gv("estImgLoc") === "ram"
+            mtp: { vram: auto.mtp.vram + auto.mtp.ram, ram: 0 }, // Drafter always in VRAM
+            img: (gv("estImgLoc") === "ram" || ck("noMmprojOffload"))
                 ? { vram: 0, ram: auto.img.vram + auto.img.ram }
                 : { vram: auto.img.vram + auto.img.ram, ram: 0 }
         };
@@ -165,8 +227,6 @@
         vBar.innerHTML = "";
         rBar.innerHTML = "";
 
-        // Shorthand names shown directly on the segments (not just tooltips).
-        var SHORT = { layers: "MODEL", moe: "MOE", ctx: "KV", mtp: "MTP", img: "IMG" };
         function makeSeg(bar, gb, scale, cls, label, title) {
             var pct = gb / scale * 100;
             var d = document.createElement("div");
@@ -179,17 +239,37 @@
             return d;
         }
 
-        makeSeg(vBar, osVram, vScale, "os", "OS", "OS / driver: " + osVram.toFixed(2) + " GB (overridable)");
-        makeSeg(vBar, scratchVram, vScale, "rt", "SCR", "Scratchpad: " + scratchVram.toFixed(2) + " GB (" + scratchFactor.toFixed(2) + "×" + (auto.totalB || 0) + "B)");
-        makeSeg(vBar, cublasVram, vScale, "cublas", "cuBLAS", "cuBLAS workspace: " + cublasVram.toFixed(2) + " GB (overridable)");
-        makeSeg(vBar, bufVram, vScale, "buf", "BUF", "Buffers: " + bufVram.toFixed(2) + " GB (ubatch " + ubatchSize + ")");
-        makeSeg(rBar, batchRam, rScale, "batch", "BATCH", "Batch buffers: " + batchRam.toFixed(2) + " GB (batch " + batchSize + ", always in RAM)");
-        Object.keys(areas).forEach(function(k) {
-            if (areas[k].vram > 0.001) {
-                makeSeg(vBar, areas[k].vram, vScale, "vram", SHORT[k], k + " in VRAM: " + areas[k].vram.toFixed(1) + " GB");
+        // Per-area tooltip details (the legend text is prepended to the title below).
+        var details = {
+            os: "overridable",
+            scratch: scratchFactor.toFixed(2) + "×" + (auto.totalB || 0) + "B",
+            cublas: "overridable",
+            ubatch: "ubatch " + ubatchSize,
+            batch: "batch " + batchSize + ", always in RAM"
+        };
+        // Resolve the GB amounts for every area, for both destinations.
+        function segGB(k) {
+            if (k in areas) return areas[k];
+            switch (k) {
+                case "os":      return { vram: osVram, ram: 0 };
+                case "scratch": return { vram: scratchVram, ram: 0 };
+                case "cublas":  return { vram: cublasVram, ram: 0 };
+                case "ubatch":  return { vram: bufVram, ram: 0 };
+                case "batch":   return { vram: 0, ram: batchRam };
+                default:        return { vram: 0, ram: 0 };
             }
-            if (areas[k].ram > 0.001) {
-                makeSeg(rBar, areas[k].ram, rScale, "ram", SHORT[k], k + " in RAM: " + areas[k].ram.toFixed(1) + " GB");
+        }
+        // Both bars and the legend follow BAR_ORDER, so the segment order in
+        // the bars matches the legend order.
+        BAR_ORDER.forEach(function(k) {
+            var a = AREAS[k];
+            var s = segGB(k);
+            var extra = details[k] ? " (" + details[k] + ")" : "";
+            if (s.vram > 0.001) {
+                makeSeg(vBar, s.vram, vScale, a.cls, a.short, a.legend + " in VRAM: " + s.vram.toFixed(1) + " GB" + extra);
+            }
+            if (s.ram > 0.001) {
+                makeSeg(rBar, s.ram, rScale, a.cls, a.short, a.legend + " in RAM: " + s.ram.toFixed(1) + " GB" + extra);
             }
         });
 
@@ -251,6 +331,7 @@
     // exposed for completeness / debugging.
     window.MemEst = {
         updateMemBar: updateMemBar,
+        buildLegend: buildLegend,
         computeEstimates: computeEstimates,
         parseModel: parseModel,
         getCap: getCap

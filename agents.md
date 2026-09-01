@@ -57,7 +57,9 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `parseModel(name)` — extracts `{ totalB, activeB, isMoE }` from the filename.
   `27B` → 27B dense; `A8B` → 8B-active MoE; `30B-A3B` → 30B total / 3B active.
 - `estimateLayers`, `estimateEmbDim` — rough structural guesses from param count.
-- `kvBytesFactor(cacheType)` — KV-cache size factor per cache type.
+- `kvBytesFactor(cacheType)` — KV-cache size factor per cache type. Covers all
+  `-ctk`/`-ctv` types (`f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`,
+  `q5_0`, `q5_1`); unknown values fall back to f16 (2 bytes).
 - `computeEstimates()` — returns per-area `{ vram, ram }` in GB for the five areas:
   `layers` (non-MoE), `moe` (experts), `ctx` (KV cache), `mtp` (MTP head), `img` (vision).
 - VRAM/RAM placement is now controlled by **per-area sliders** (`estLayersPct`,
@@ -90,16 +92,38 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   `noKvOffload` checkbox sit above the KV cache slider; the `specType` select sits in
   the MTP Head card (above the Loc row) — it was moved out of the Speculative
   Decoding / MTP section of the Model panel so the spec choice is visible right next
-  to where the MTP head is placed. These were moved out of the
+  to where the MTP head is placed. The `noMmprojOffload` checkbox sits in the
+  Image Layer (vision) card (below the Loc row). The `batchSize` / `ubatchSize` inputs sit at the
+  top of the Overheads & Factors card. All of these were moved out of the
   Model & Server / Advanced panels so the user sees them in context. (The MTP Head
   card is the placement area for the MTP head: `specType` select, a Loc row showing
   it is always in VRAM when a spec type is active, and the `autoMtp` estimate.)
+- **Area appearance is defined once, in the `AREAS` table at the top of
+  `logic_memory.js`** (`short` = inline segment label, `cls` = CSS class,
+  `legend` = legend label). The same `cls` is used for the bar segment
+  (`.mem-seg.<cls>`) and the legend swatch (swatch elements carry the
+  `mem-seg <cls>` classes), so each area color is defined exactly once in
+  `style.css`. Colors are **per-area, not per-destination**: an area looks
+  the same in the VRAM and RAM bars (MODEL=blue, MOE=green, KV=cyan,
+  Drafter/mtp=orange, IMG=pink). The legend is **generated** by
+  `MemEst.buildLegend()` (called once from `init()` in `logic.js`) into
+  `#memLegend` — the HTML contains no per-area legend markup, and there are
+  no separate `.mem-legend .swatch.<area>` color rules. There is **no separate
+  legend order**: the `BAR_ORDER` array in `logic_memory.js` is the single
+  order shared by the VRAM bar, the RAM bar, and the legend (OS, Scratch,
+  cuBLAS, UBatch, Model, MoE, KV, Drafter, IMG, Batch). Bar tooltips use the
+  `legend` text (not the raw key or `short` label) followed by an "in VRAM" /
+  "in RAM" postfix and the GB amount (e.g. "Model in VRAM: 12.3 GB").
 - **`noKvOffload` interaction:** when `--no-kv-offload` is checked, the KV cache is
   forced to 100 % RAM (0 % VRAM) regardless of `estCtxPct`, and the `estCtxPct` slider
   is disabled (greyed out, snapped to 0 %). Unchecking `noKvOffload` re-enables the
   slider (it retains its last value, which was forced to 0 while checked).
+- **`noMmprojOffload` interaction:** when `--no-mmproj-offload` is checked (checkbox in
+  the Image Layer (vision) card), the image/mmproj area is forced to 100 % RAM
+  (0 % VRAM) regardless of `estImgLoc`, and the `estImgLoc` select is disabled
+  (greyed out, snapped to `ram`). Unchecking `noMmprojOffload` re-enables the select.
 - `updateMemBar()` — renders **two separate bars stacked vertically**: `memBarVram`
-  (VRAM=blue) above `memBarRam` (RAM=green), each scaled to its own capacity, each with
+  `memBarVram` above `memBarRam`, each scaled to its own capacity, each with
   a trailing headroom segment and an OVER warning in its used/cap readout
   (`memVramCap` / `memRamCap`, e.g. `VRAM: 12.3 / 24 GB`). When a bar exceeds
   its capacity, the over-budget portion (from the cap mark to the end of the
@@ -148,6 +172,10 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   and snaps it to 0; `resetAll()` re-enables it. If you add a new flag that
   constrains a slider, follow the same pattern (disable in the input handler,
   re-enable in `resetAll`).
+- **`noMmprojOffload` gates `estImgLoc`:** checking `--no-mmproj-offload` disables the
+  `estImgLoc` select and forces the image/mmproj area to 100 % RAM (0 % VRAM) in
+  `updateMemBar()`. The event handler in `bindEvents` toggles `estImgLoc.disabled`
+  and snaps it to `ram`; `resetAll()` re-enables it. Same pattern as `noKvOffload`.
 - **String/number precedence trap:** the VRAM readout is built as
   `"VRAM: " + vramUsed.toFixed(1) + " / " + vramCap + " GB"`. A stray `/ 1` after the
   `toFixed(1)` used to make the whole expression `"VRAM: X" / 1` → `NaN`. Keep the

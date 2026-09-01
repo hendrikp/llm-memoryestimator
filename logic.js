@@ -105,6 +105,7 @@
         if (ck("flashAttn")) args.push("--flash-attn on");
         if (ck("jinja")) args.push("--jinja");
         if (ck("noKvOffload")) args.push("--no-kv-offload");
+        if (ck("noMmprojOffload")) args.push("--no-mmproj-offload");
         if (ck("promptCache")) args.push("--prompt-cache " + (gv("promptCachePath") || "cache.bin"));
         if (ck("verbose")) args.push("-v");
         if (gv("loraPath")) args.push("--lora " + gv("loraPath"));
@@ -342,7 +343,7 @@
         "modelPath", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "cacheK", "cacheV",
         "batchSize", "ubatchSize", "host", "port", "parallel", "mainGpu", "tensorSplit",
         "binaryPath", "envVars",
-        "flashAttn", "jinja", "noKvOffload", "promptCache", "promptCachePath", "verbose",
+        "flashAttn", "jinja", "noKvOffload", "noMmprojOffload", "promptCache", "promptCachePath", "verbose",
         "loraPath", "extraArgs",
         "temp", "topP", "topK", "minP", "presPen", "repPen", "freqPen", "repLastN",
         "maxTokens", "seed", "grammarFile",
@@ -445,6 +446,7 @@
         el("flashAttn").checked = true;
         el("jinja").checked = true;
         el("noKvOffload").checked = false;
+        el("noMmprojOffload").checked = false;
         el("promptCache").checked = false;
         el("promptCachePath").value = "";
         el("verbose").checked = false;
@@ -472,6 +474,7 @@
         el("specTypeV").value = "";
         ["estLayersPct", "estMoePct", "estCtxPct"].forEach(function(id) { el(id).value = "100"; el(id).disabled = false; });
         el("estImgLoc").value = "vram";
+        el("estImgLoc").disabled = false;
         el("osOverhead").value = "0.25";
         el("cublasOverhead").value = "0.35";
         el("scratchFactor").value = "0.025";
@@ -507,6 +510,15 @@
                         slider.disabled = false;
                     }
                 }
+                if (ev.target.id === "noMmprojOffload") {
+                    var loc = el("estImgLoc");
+                    if (ev.target.checked) {
+                        loc.disabled = true;
+                        loc.value = "ram";
+                    } else {
+                        loc.disabled = false;
+                    }
+                }
                 updateOutput();
             }
         });
@@ -536,6 +548,7 @@
     function init() {
         bindEvents();
         detectSystem();
+        MemEst.buildLegend(); // static: generated once from the AREAS table
         updateOutput();
     }
 

@@ -12,6 +12,10 @@
     --red: #f85149;
     --radius: 6px;
     --mono: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    /* Pattern definitions shared by the bar segments and the legend swatches
+       (both use the same classes, so the pattern is defined only once). */
+    --empty-stripes: repeating-linear-gradient(45deg, #21262d 0 6px, #161b22 6px 12px);
+    --over-stripes: repeating-linear-gradient(45deg, rgba(248, 81, 73, 0.55) 0 8px, rgba(248, 81, 73, 0.12) 8px 16px);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -145,32 +149,39 @@ header h1 span { color: var(--accent); }
     border-right: 1px solid rgba(0,0,0,0.35);
     min-width: 0; transition: width 0.2s;
 }
-.mem-seg.vram { background: linear-gradient(90deg, #1f6feb, #58a6ff); }
-.mem-seg.ram { background: linear-gradient(90deg, #2ea043, #3fb950); }
-.mem-seg.empty { background: repeating-linear-gradient(45deg, #21262d, #21262d 6px, #161b22 6px, #161b22 12px); color: var(--text-secondary); }
+/* Area colors: one definition per area, shared by the bar segment and the
+   legend swatch (both use the same class, see AREAS in logic_memory.js).
+   An area has the same color in the VRAM and RAM bars; the drafter (mtp)
+   has its own distinct color. */
+.mem-seg.layers { background: linear-gradient(90deg, #1f6feb, #58a6ff); }
+.mem-seg.moe { background: linear-gradient(90deg, #2ea043, #3fb950); }
+.mem-seg.ctx { background: linear-gradient(90deg, #0f6e8c, #22a7d0); }
+.mem-seg.mtp { background: linear-gradient(90deg, #b45309, #e08a2a); }
+.mem-seg.img { background: linear-gradient(90deg, #8a3a8a, #c06ac0); }
+.mem-seg.empty { background: var(--empty-stripes); color: var(--text-secondary); }
 .mem-seg.os { background: linear-gradient(90deg, #6e4a1f, #9a6a2a); }
 .mem-seg.rt { background: linear-gradient(90deg, #4a3a6e, #6a5a9a); }
 .mem-seg.buf { background: linear-gradient(90deg, #1a5a5a, #2a8a8a); }
 .mem-seg.cublas { background: linear-gradient(90deg, #7a2a4a, #b04a7a); }
 .mem-seg.batch { background: linear-gradient(90deg, #8a6a1a, #c09a2a); }
 .mem-seg.over {
-    position: absolute; top: 0; bottom: 0; height: auto;
-    background: repeating-linear-gradient(45deg, rgba(248, 81, 73, 0.55) 0 8px, rgba(248, 81, 73, 0.12) 8px 16px);
+    background: var(--over-stripes);
     border-left: 2px solid var(--red);
+}
+/* The over-budget overlay is absolutely positioned only inside a bar; the
+   legend swatch keeps its normal inline flow. */
+.mem-bar .mem-seg.over {
+    position: absolute; top: 0; bottom: 0; height: auto;
     pointer-events: none;
 }
-.mem-legend .swatch.os { background: #9a6a2a; }
-.mem-legend .swatch.rt { background: #6a5a9a; }
-.mem-legend .swatch.buf { background: #2a8a8a; }
-.mem-legend .swatch.cublas { background: #b04a7a; }
-.mem-legend .swatch.batch { background: #c09a2a; }
 .mem-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.72rem; font-family: var(--mono); }
 .mem-legend .item { display: flex; align-items: center; gap: 5px; }
-.mem-legend .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-.mem-legend .swatch.vram { background: var(--accent); }
-.mem-legend .swatch.ram { background: var(--green); }
-.mem-legend .swatch.empty { background: repeating-linear-gradient(45deg, #21262d 0 3px, #161b22 3px 6px); border: 1px solid var(--border); }
-.mem-legend .swatch.over { background: repeating-linear-gradient(45deg, rgba(248, 81, 73, 0.55) 0 3px, rgba(248, 81, 73, 0.12) 3px 6px); border: 1px solid var(--red); }
+/* Swatches carry the `mem-seg <cls>` classes and thus reuse the .mem-seg
+   colors/patterns above (single definition per area). Only the legend
+   presentation (size, flow, borders) is defined here. */
+.mem-legend .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border-right: none; }
+.mem-legend .swatch.empty { border: 1px solid var(--border); }
+.mem-legend .swatch.over { border: 1px solid var(--red); }
 .mem-estimates { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .mem-est { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
 .mem-est .lbl { font-size: 0.66rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; }
