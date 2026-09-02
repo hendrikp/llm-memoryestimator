@@ -17,7 +17,8 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
 | File | Role |
 |------|------|
-| `configtool.html` | Markup only. All form fields, the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic_memory.js` then `logic.js` (order matters — `logic.js` calls `MemEst.*`). |
+| `configtool.html` | Markup only. All form fields (bare — no `value`/``checked`/`selected` attributes), the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic_memory.js`, then `presets.js`, then `logic.js` (order matters — `logic.js` calls `MemEst.*` and reads `window.CONFIG_PRESETS`). |
+| `presets.js` | `window.CONFIG_PRESETS`: the **default preset** (`"default"`, full state) plus the built-in partial presets (`chat` / `fast` / `quality` / `embed`). All selectable from the Apply-preset dropdown ("default" included). Kept as `.js` (not fetched `.json`) because `file://` fetches are blocked; downloading a preset gives you the same JSON. |
 | `style.css` | All styling. CSS variables live in `:root`. Memory-bar classes are prefixed `mem-*`, system-panel `sys-*`. |
 | `logic_memory.js` | Memory size estimation + VRAM/RAM bar rendering, wrapped in an IIFE. Exposes `window.MemEst` (`updateMemBar`, `computeEstimates`, `parseModel`, `getCap`). Owns its own `gv`/`ck`/`el` DOM helpers. |
 | `logic.js` | All other behavior, wrapped in an IIFE. See function map below. Calls `MemEst.updateMemBar()` from `updateOutput()`. |
@@ -35,8 +36,15 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 ## Main functions (logic.js)
 
 **Argument building**
-- `DEFAULTS` — map of field id → default value. A field equal to its default is
-  **omitted** from the command line (keeps output clean).
+- `PRESETS` / `DEFAULT_PRESET` — read from `window.CONFIG_PRESETS` (defined in
+  **`presets.js`**). `"default"` is the full-state **default preset**: `init()` applies it
+  on startup, `resetAll()` restores it, it is selectable in the Apply-preset dropdown,
+  and "Save preset" writes exactly this shape. `configtool.html` carries **no**
+  `value`/`checked`/`selected` attributes — controls only get values from presets.
+- `DEFAULTS` — derived from `DEFAULT_PRESET` (`JSON.parse(JSON.stringify(...))`). A field
+  equal to its default is **omitted** from the command line (keeps output clean).
+  Exception: `--host`/`--port` are emitted whenever non-empty (they are per-machine
+  bind addresses, not omittable tuning params).
 - `isDefault(id)` — compares current value against `DEFAULTS`.
 - `buildArgs()` — assembles the ordered arg list + env lines + chat kwargs. This is the
   single source of truth for what gets emitted.
@@ -140,10 +148,22 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
 **Presets**
 - `FIELD_IDS` — list of every persisted field id.
-- `collectState` / `applyState` — snapshot / restore all fields.
+- `collectState` / `applyPresetState` — snapshot / restore all fields
+  (`applyPresetState` does **not** call `updateOutput`; callers do).
 - `savePreset` / `loadPresetFile` — download / read a `.json` preset via file selection.
-- `applyPreset(name)` — built-in presets (myconfig / chat / fast / quality / embed).
-- `resetAll` / `clearAll` — restore defaults / wipe everything.
+- `applyPreset(name)` — built-in presets (default / myconfig / chat / fast / quality /
+  embed); `myconfig` only shows a toast (presets load via file), `default` applies the
+  full default preset like Reset does (system-detection inputs keep their values).
+- `resetAll` / `clearAll` — restore the default preset / wipe everything.
+- `globalPresets()` — grabs `window.CONFIG_PRESETS`, toasts an error if `presets.js`
+  failed to load (tool then runs with bare, empty controls).
+- `lazyGate()` — disables `lazyMode` and snaps it to `off` unless
+  `loadMode === "mmap"`.
+- `syncGates()` — re-syncs **all** dependent controls after a bulk state change
+  (`init`, `resetAll`, `clearAll`, `applyPreset`, `loadPresetFile`): `lazyGate()` plus
+  the `estCtxPct` slider (disable + snap to 0 when `noKvOffload`) and `estImgLoc`
+  select (disable + snap to `ram` when `noMmprojOffload`) — checkbox change handlers
+  don't fire programmatically, so presets must re-apply the gates themselves.
 
 **Misc**
 - `updateOutput()` — refresh val-displays, regenerate the active tab, redraw the memory bars.
@@ -163,6 +183,15 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   scale), so a bar that is full always spans the full width.
 - Adding a new field that affects the command line: update `buildArgs()` **and** `DEFAULTS`
   (so it's omitted when at default) **and** `FIELD_IDS` (so it round-trips in presets).
+- **`lazyMode`** (`--lazy-mode`, select `auto`/`on`/`off`, default `off` → omitted) sits
+  next to `loadMode` in the Model & Server panel; on-demand reading of large tensors
+  (e.g. per-layer token embeddings). **`lazyMode` is gated on `loadMode === "mmap"`**
+  (it requires mmap) via `lazyGate()` — disabled + snapped to `off` otherwise — and
+  `buildArgs` only emits `--lazy-mode` when the load mode is mmap. Same disable/snap
+  pattern as `noKvOffload` → `estCtxPct`. **`overrideTensor`**
+  (`--override-tensor <pattern>=<buffer type>,...`, free text, default empty → omitted)
+  sits below `tensorSplit`; e.g. `per_layer_token_embd=CPU` offloads the ngram/embedding
+  tensors to CPU. Both flow into the JSON config via `extra_args` like the other flags.
 - **`ncpuMoe` is clamped to ≥ 0 at every use site** (`buildArgs`, `genJson`):
   the input has `min="0"` but users can still type negative values, and `num()` returns
   them raw. Never read `num("ncpuMoe")` without clamping.

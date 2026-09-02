@@ -9,38 +9,25 @@
     function num(id) { var v = parseFloat(gv(id)); return isNaN(v) ? null : v; }
 
     // ------------------------------------------------------------------
-    // Defaults: a param equal to its default is omitted from the cmd line.
+    // Presets live in presets.js (window.CONFIG_PRESETS), including the
+    // "default" preset: the single source of truth for the tool's initial
+    // state. It is applied on startup, restored by Reset, selectable in the
+    // Apply-preset dropdown, and `DEFAULTS` (used to omit at-default params
+    // from the cmd line) is derived from it — configtool.html carries no
+    // value/checked/selected attributes at all.
     // ------------------------------------------------------------------
-    var DEFAULTS = {
-        "ctxSize": "64000",
-        "ngl": "all",
-        "ncpuMoe": "0",
-        "threads": "8",
-        "loadMode": "mlock",
-        "cacheK": "q4_0",
-        "cacheV": "q4_0",
-        "batchSize": "2048",
-        "ubatchSize": "512",
-        "parallel": "1",
-        "mainGpu": "0",
-        "specDraftNMax": "6",
-        "specDraftPMin": "0.75",
-        "temp": "0.6",
-        "topP": "0.95",
-        "topK": "20",
-        "minP": "0",
-        "presPen": "0",
-        "repPen": "1.0",
-        "freqPen": "0",
-        "repLastN": "64",
-        "maxTokens": "0",
-        "seed": "-1",
-        "reasoningBudget": "1024",
-        "specType": "",
-        "osOverhead": "0.25",
-        "cublasOverhead": "0.35",
-        "scratchFactor": "0.025"
-    };
+    var PRESETS = globalPresets();
+    var DEFAULT_PRESET = PRESETS["default"] || {};
+    var DEFAULTS = DEFAULT_PRESET;
+
+    function globalPresets() {
+        if (!window.CONFIG_PRESETS || !window.CONFIG_PRESETS["default"]) {
+            // presets.js failed to load — keep the tool usable with bare controls.
+            setTimeout(function() { showToast("presets.js failed to load"); }, 0);
+            return {};
+        }
+        return window.CONFIG_PRESETS;
+    }
 
     function isDefault(id) {
         return gv(id) === DEFAULTS[id];
@@ -92,15 +79,17 @@
         if (ncpuMoe > 0) args.push("-ncpu-moe");
         if (!isDefault("threads")) args.push("-t " + gv("threads"));
         if (!isDefault("loadMode")) args.push("--load-mode " + gv("loadMode"));
+        if (gv("loadMode") === "mmap" && gv("lazyMode") && !isDefault("lazyMode")) args.push("--lazy-mode " + gv("lazyMode"));
         if (!isDefault("cacheK")) args.push("--cache-type-k " + gv("cacheK"));
         if (!isDefault("cacheV")) args.push("--cache-type-v " + gv("cacheV"));
         if (!isDefault("batchSize")) args.push("--batch-size " + gv("batchSize"));
         if (!isDefault("ubatchSize")) args.push("--ubatch-size " + gv("ubatchSize"));
-        if (!isDefault("host")) args.push("--host " + gv("host"));
-        if (!isDefault("port")) args.push("--port " + gv("port"));
+        if (gv("host")) args.push("--host " + gv("host"));
+        if (gv("port")) args.push("--port " + gv("port"));
         if (!isDefault("parallel")) args.push("--parallel " + gv("parallel"));
         if (!isDefault("mainGpu")) args.push("--main-gpu " + gv("mainGpu"));
         if (gv("tensorSplit")) args.push("--tensor-split " + gv("tensorSplit"));
+        if (gv("overrideTensor")) args.push("--override-tensor " + gv("overrideTensor"));
 
         if (ck("flashAttn")) args.push("--flash-attn on");
         if (ck("jinja")) args.push("--jinja");
@@ -340,8 +329,8 @@
     // Presets: collect / apply / save / load.
     // ------------------------------------------------------------------
     var FIELD_IDS = [
-        "modelPath", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "cacheK", "cacheV",
-        "batchSize", "ubatchSize", "host", "port", "parallel", "mainGpu", "tensorSplit",
+        "modelPath", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "lazyMode", "cacheK", "cacheV",
+        "batchSize", "ubatchSize", "host", "port", "parallel", "mainGpu", "tensorSplit", "overrideTensor",
         "binaryPath", "envVars",
         "flashAttn", "jinja", "noKvOffload", "noMmprojOffload", "promptCache", "promptCachePath", "verbose",
         "loraPath", "extraArgs",
@@ -365,37 +354,20 @@
         return state;
     }
 
-    function applyState(state) {
+    // Shared applier (no updateOutput — callers decide when to refresh).
+    function applyPresetState(state) {
         FIELD_IDS.forEach(function(id) {
             var e = el(id);
             if (!e || !(id in state)) return;
             if (e.type === "checkbox") e.checked = !!state[id];
             else e.value = state[id];
         });
-        updateOutput();
     }
 
-    var PRESETS = {
-        chat: {
-            "ctxSize": "32000", "threads": "16", "batchSize": "4096", "ubatchSize": "1024",
-            "temp": "0.7", "topP": "0.95", "topK": "40", "repPen": "1.1", "repLastN": "64",
-            "maxTokens": "4096", "chatKwargs": "{\"reasoning_effort\":\"medium\"}"
-        },
-        fast: {
-            "ctxSize": "16000", "threads": "32", "batchSize": "8192", "ubatchSize": "2048",
-            "temp": "0.6", "topP": "0.9", "topK": "20", "maxTokens": "2048"
-        },
-        quality: {
-            "ctxSize": "64000", "threads": "16", "batchSize": "4096", "ubatchSize": "1024",
-            "temp": "0.5", "topP": "0.95", "topK": "30", "repPen": "1.05", "maxTokens": "8192",
-            "cacheK": "q8_0", "cacheV": "q8_0"
-        },
-        embed: {
-            "ctxSize": "32000", "threads": "16", "batchSize": "8192", "ubatchSize": "2048",
-            "temp": "0", "topP": "1", "topK": "1", "maxTokens": "0"
-        }
-    };
-
+    // PRESETS (default/chat/fast/quality/embed) come from presets.js.
+    // Presets other than "default" are partial diffs — fields they omit are
+    // left untouched. "default" is a full preset, so applying it is the same
+    // as Reset (minus clearing the system-detection inputs).
     function applyPreset(name) {
         if (name === "myconfig") {
             showToast("Use “Load preset” to restore your saved config");
@@ -403,7 +375,9 @@
         }
         var p = PRESETS[name];
         if (!p) return;
-        applyState(p);
+        applyPresetState(p);
+        syncGates();
+        updateOutput();
         showToast("Preset applied: " + name);
     }
 
@@ -416,7 +390,9 @@
         var reader = new FileReader();
         reader.onload = function() {
             try {
-                applyState(JSON.parse(reader.result));
+                applyPresetState(JSON.parse(reader.result));
+                syncGates();
+                updateOutput();
                 showToast("Preset loaded");
             } catch (e) {
                 showToast("Invalid preset file");
@@ -425,59 +401,41 @@
         reader.readAsText(file);
     }
 
+    // lazyMode requires mmap: keep the select disabled and snapped to "off"
+    // whenever the load mode is not mmap (see buildArgs, which also refuses
+    // to emit --lazy-mode in that case).
+    function lazyGate() {
+        var lzm = el("lazyMode");
+        if (gv("loadMode") !== "mmap") {
+            lzm.disabled = true;
+            lzm.value = "off";
+        } else {
+            lzm.disabled = false;
+        }
+    }
+
+    // Re-sync all dependent-control gates after a bulk state change
+    // (init / preset apply / preset load / reset / clear) — checkbox
+    // handlers don't fire programmatically, so the estCtxPct slider and
+    // estImgLoc select must be re-enabled/snapped here.
+    function syncGates() {
+        lazyGate();
+        var slider = el("estCtxPct");
+        slider.disabled = ck("noKvOffload");
+        if (ck("noKvOffload")) slider.value = "0";
+        var loc = el("estImgLoc");
+        loc.disabled = ck("noMmprojOffload");
+        if (ck("noMmprojOffload")) loc.value = "ram";
+    }
+
+    // Restore the default preset (system-detection inputs are emptied,
+    // not restored — they were detected or typed, not part of the preset).
     function resetAll() {
-        el("modelPath").value = "Qwen3.8-27B-NVFP4-MTP-VERY-LOW.gguf";
-        el("ctxSize").value = "64000";
-        el("ngl").value = "all";
-        el("ncpuMoe").value = "0";
-        el("threads").value = "8";
-        el("loadMode").value = "mlock";
-        el("cacheK").value = "q4_0";
-        el("cacheV").value = "q4_0";
-        el("batchSize").value = "2048";
-        el("ubatchSize").value = "512";
-        el("host").value = "192.168.2.105";
-        el("port").value = "8080";
-        el("parallel").value = "1";
-        el("mainGpu").value = "0";
-        el("tensorSplit").value = "";
-        el("binaryPath").value = "llama-server.exe";
-        el("envVars").value = "";
-        el("flashAttn").checked = true;
-        el("jinja").checked = true;
-        el("noKvOffload").checked = false;
-        el("noMmprojOffload").checked = false;
-        el("promptCache").checked = false;
-        el("promptCachePath").value = "";
-        el("verbose").checked = false;
-        el("loraPath").value = "";
-        el("extraArgs").value = "";
-        el("temp").value = "0.6";
-        el("topP").value = "0.95";
-        el("topK").value = "20";
-        el("minP").value = "0";
-        el("presPen").value = "0";
-        el("repPen").value = "1.0";
-        el("freqPen").value = "0";
-        el("repLastN").value = "64";
-        el("maxTokens").value = "0";
-        el("seed").value = "-1";
-        el("grammarFile").value = "";
-        el("reasoningBudget").value = "1024";
-        el("reasoningPreserve").checked = true;
-        el("chatKwargs").value = "{\"reasoning_effort\":\"medium\"}";
-        el("specType").value = "";
-        el("draftModel").value = "";
-        el("specDraftNMax").value = "6";
-        el("specDraftPMin").value = "0.75";
-        el("specTypeK").value = "";
-        el("specTypeV").value = "";
-        ["estLayersPct", "estMoePct", "estCtxPct"].forEach(function(id) { el(id).value = "100"; el(id).disabled = false; });
-        el("estImgLoc").value = "vram";
-        el("estImgLoc").disabled = false;
-        el("osOverhead").value = "0.25";
-        el("cublasOverhead").value = "0.35";
-        el("scratchFactor").value = "0.025";
+        applyPresetState(DEFAULT_PRESET);
+        ["sysGpuArchManual", "sysVramManual", "sysRamManual"].forEach(function(id) {
+            if (el(id)) el(id).value = "";
+        });
+        syncGates();
         updateOutput();
     }
 
@@ -489,6 +447,7 @@
             else e.value = "";
         });
         el("ncpuMoe").value = "0";
+        syncGates();
         updateOutput();
     }
 
@@ -501,6 +460,7 @@
             if (ev.target && ev.target.closest && ev.target.closest(".field, .check-row, .sys-panel, .mem-est")) {
                 if (ev.target.id === "batchSize") clampBatch("batchSize");
                 if (ev.target.id === "ubatchSize") clampBatch("ubatchSize");
+                if (ev.target.id === "loadMode") lazyGate();
                 if (ev.target.id === "noKvOffload") {
                     var slider = el("estCtxPct");
                     if (ev.target.checked) {
@@ -546,6 +506,10 @@
     }
 
     function init() {
+        // Load the default preset on startup: the JSON above is the single
+        // source of truth for initial state (the HTML ships bare controls).
+        applyPresetState(DEFAULT_PRESET);
+        syncGates();
         bindEvents();
         detectSystem();
         MemEst.buildLegend(); // static: generated once from the AREAS table

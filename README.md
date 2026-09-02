@@ -10,5 +10,8 @@ Static site — no build step, no dependencies. Just open `configtool.html` in a
 
 - **Memory estimator** — order-of-magnitude VRAM/RAM breakdown per area (model layers, MoE experts, KV cache, MTP head, vision layer) with per-area VRAM/RAM split sliders and fixed overhead segments (OS, scratchpad, cuBLAS, ubatch/batch buffers). Estimates are heuristics, not exact.
 - **Launch-script builder** — generates `llama-server` commands for Windows batch, PowerShell, Bash, or JSON, with defaults omitted to keep output clean.
-- **Presets** — built-in presets plus save/load your own as `.json`.
+- **Presets** — built-in presets (`Default` / Chat / Fast / Quality / Embed, defined in
+  `presets.js`) plus save/load your own as `.json`. The `Default` preset is the tool's
+  initial state: it loads on startup, is restored by Reset, and is also selectable from
+  the Apply-preset dropdown.
 - **System detection** — WebGL-based GPU name lookup (display only); VRAM/RAM capacity via manual inputs.
