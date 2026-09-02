@@ -14,6 +14,7 @@
                 <select class="preset-select" id="presetSelect">
                     <option value="">Apply preset&hellip;</option>
                     <option value="default">Default</option>
+                    <option value="llamacpp_defaults">llama.cpp defaults</option>
                     <option value="myconfig">My config</option>
                     <option value="chat">Chat</option>
                     <option value="fast">Fast</option>
@@ -106,8 +107,8 @@
                         <div class="mem-est">
                             <div class="lbl">Context (KV cache)</div>
                             <div class="row"><label for="ctxSize">ctx</label><input type="number" id="ctxSize" min="0" step="1024"><span class="hint-inline">-c, tokens</span></div>
-                            <div class="row"><label>K</label><select id="cacheK"><option value="f32">f32</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select><span class="hint-inline">-ctk, K cache</span></div>
-                            <div class="row"><label>V</label><select id="cacheV"><option value="f32">f32</option><option value="f16">f16</option><option value="bf16">bf16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select><span class="hint-inline">-ctv, V cache</span></div>
+                            <div class="row"><label>K</label><select id="cacheK"><option value="f16">f16</option><option value="f32">f32</option><option value="bf16">bf16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select><span class="hint-inline">-ctk, K cache</span></div>
+                            <div class="row"><label>V</label><select id="cacheV"><option value="f16">f16</option><option value="f32">f32</option><option value="bf16">bf16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select><span class="hint-inline">-ctv, V cache</span></div>
                             <div class="row check-row"><input type="checkbox" id="noKvOffload"><label for="noKvOffload">No KV offload</label></div>
                             <div class="row"><label>VRAM</label><input type="range" id="estCtxPct" min="0" max="100" step="5"><span class="unit" id="estCtxPctVal">100%</span></div>
                             <div class="auto" id="ctxVramAmt">&mdash;</div>
@@ -118,8 +119,17 @@
                             <div class="row"><label for="specType">Spec</label>
                                 <select id="specType">
                                     <option value="">&mdash; none &mdash;</option>
+                                    <option value="none">none</option>
+                                    <option value="draft-simple">draft-simple</option>
+                                    <option value="draft-eagle3">draft-eagle3</option>
                                     <option value="draft-mtp">draft-mtp</option>
-                                    <option value="draft-external">draft-external</option>
+                                    <option value="draft-dflash">draft-dflash</option>
+                                    <option value="draft-dspark">draft-dspark</option>
+                                    <option value="ngram-simple">ngram-simple</option>
+                                    <option value="ngram-map-k">ngram-map-k</option>
+                                    <option value="ngram-map-k4v">ngram-map-k4v</option>
+                                    <option value="ngram-mod">ngram-mod</option>
+                                    <option value="ngram-cache">ngram-cache</option>
                                 </select>
                             </div>
                             <div class="row"><label>Loc</label><span class="unit">VRAM (only when drafter active)</span></div>
@@ -133,16 +143,16 @@
                                     <option value="ram">RAM</option>
                                 </select>
                             </div>
-                            <div class="row check-row"><input type="checkbox" id="noMmprojOffload" title="--no-mmproj-offload, keep the vision projector (mmproj) out of VRAM"><label for="noMmprojOffload">No mmproj offload</label></div>
+                            <div class="row check-row"><input type="checkbox" id="noMmprojOffload"><label for="noMmprojOffload">No mmproj offload</label></div>
                             <div class="auto" id="autoImg">auto</div>
                         </div>
                         <div class="mem-est">
                             <div class="lbl">Overheads &amp; Factors</div>
-                            <div class="row"><label>batch</label><input type="number" id="batchSize" min="512" step="512" title="--batch-size, multiple of ubatch"></div>
-                            <div class="row"><label>ubatch</label><input type="number" id="ubatchSize" min="32" step="32" title="--ubatch-size, multiple of 32"></div>
-                            <div class="row"><label>OS</label><input type="number" id="osOverhead" min="0" step="0.05" title="OS / driver"></div>
-                            <div class="row"><label>cuBLAS</label><input type="number" id="cublasOverhead" min="0" step="0.05" title="cuBLAS workspace"></div>
-                            <div class="row"><label>SCR&times;P</label><input type="number" id="scratchFactor" min="0" step="0.005" title="GB per PB"></div>
+                            <div class="row"><label>batch</label><input type="number" id="batchSize" min="512" step="512"></div>
+                            <div class="row"><label>ubatch</label><input type="number" id="ubatchSize" min="32" step="32"></div>
+                            <div class="row"><label>OS</label><input type="number" id="osOverhead" min="0" step="0.05"></div>
+                            <div class="row"><label>cuBLAS</label><input type="number" id="cublasOverhead" min="0" step="0.05"></div>
+                            <div class="row"><label>SCR&times;P</label><input type="number" id="scratchFactor" min="0" step="0.005"></div>
                         </div>
                     </div>
                 </div>
@@ -157,7 +167,12 @@
                     <div class="field">
                         <label for="modelPath">Model Path</label>
                         <input type="text" id="modelPath" placeholder="Qwen3.8-27B-NVFP4-MTP-VERY-LOW.gguf">
-                        <span class="hint">filename drives the memory estimate</span>
+                        <span class="hint">filename drives the memory estimate when no alias is set</span>
+                    </div>
+                    <div class="field">
+                        <label for="modelAlias">Model Alias (--alias)</label>
+                        <input type="text" id="modelAlias" placeholder="e.g. Qwen3.8-Flash-Next-176B-A6B-UD-IQ4_XS">
+                        <span class="hint">model name shown by the API — drives the memory estimate when set</span>
                     </div>
                     <div class="field-group">
                         <div class="field">
@@ -167,14 +182,17 @@
                         <div class="field">
                             <label for="loadMode">Load Mode</label>
                             <select id="loadMode">
-                                <option value="mlock">mlock</option>
-                                <option value="malloc">malloc</option>
+                                <option value="auto">auto</option>
+                                <option value="none">none</option>
                                 <option value="mmap">mmap</option>
+                                <option value="mlock">mlock</option>
+                                <option value="mmap+mlock">mmap+mlock</option>
+                                <option value="dio">dio</option>
                             </select>
                         </div>
                         <div class="field">
                             <label for="lazyMode">Lazy Mode (-lzm)</label>
-                            <select id="lazyMode" disabled title="--lazy-mode: on-demand reading of certain tensors (e.g. per-layer embeddings); auto = on only for tensors larger than 4 GiB; requires mmap — only selectable when Load Mode is mmap">
+                            <select id="lazyMode" disabled>
                                 <option value="auto">auto</option>
                                 <option value="on">on</option>
                                 <option value="off">off</option>
@@ -274,11 +292,11 @@
                         </div>
                         <div class="field">
                             <label for="maxTokens">Max Tokens (-n)</label>
-                            <input type="number" id="maxTokens" min="0">
+                            <input type="number" id="maxTokens" min="-1" placeholder="-1 = infinity">
                         </div>
                         <div class="field">
                             <label for="seed">Seed</label>
-                            <input type="number" id="seed">
+                            <input type="number" id="seed" placeholder="-1 = random">
                         </div>
                         <div class="field">
                             <label for="grammarFile">Grammar File</label>
@@ -290,7 +308,7 @@
                     <div class="field-group">
                         <div class="field">
                             <label for="reasoningBudget">Reasoning Budget</label>
-                            <input type="number" id="reasoningBudget" min="0">
+                            <input type="number" id="reasoningBudget" min="-1" placeholder="-1 = unrestricted">
                         </div>
                         <div class="check-row"><input type="checkbox" id="reasoningPreserve"><label for="reasoningPreserve">Preserve reasoning (--reasoning-preserve)</label></div>
                         <div class="field">
@@ -347,6 +365,7 @@
     <div class="toast" id="toast"></div>
     <script src="logic_memory.js"></script>
     <script src="presets.js"></script>
+    <script src="logic_cmdgenerator.js"></script>
     <script src="logic.js"></script>
 </body>
 </html>

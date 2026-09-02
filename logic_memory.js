@@ -10,6 +10,19 @@
     function ck(id) { var e = document.getElementById(id); return e ? e.checked : false; }
     function el(id) { return document.getElementById(id); }
 
+    // Single source of truth for defaults (see presets.js): whenever a UI
+    // field is empty, the value resolves to its llamacpp_defaults entry —
+    // no magic numbers are duplicated here. The detection guesses for VRAM/
+    // RAM capacity are NOT defaults, so they stay as explicit fallbacks at
+    // their call sites.
+    var LLD = window.LLAMA_CPP_DEFAULTS || {};
+    function lldNum(id) { return parseFloat(LLD[id]); }
+    // UI number with fallback to the defaults table.
+    function gvNum(id) {
+        var v = parseFloat(gv(id));
+        return isNaN(v) ? lldNum(id) : v;
+    }
+
     // ------------------------------------------------------------------
     // Size estimation (order-of-magnitude heuristics, not exact).
     // ------------------------------------------------------------------
@@ -77,24 +90,33 @@
         }
     }
 
+    // Model name driving the estimate: the --alias value when set (it
+    // carries the param-count / quant tags), else the filename.
+    function estName() { return gv("modelAlias") || gv("modelPath"); }
+
     function computeEstimates() {
-        var model = parseModel(gv("modelPath"));
-        var bytes = quantBytesPerWeight(gv("modelPath"));
+        var model = parseModel(estName());
+        var bytes = quantBytesPerWeight(estName());
         var totalGB = model.totalB * bytes;
         var activeGB = (model.isMoE ? model.activeB : model.totalB) * bytes;
         var moeGB = model.isMoE ? Math.max(0, totalGB - activeGB) : 0;
 
+        // Empty ctxSize = "loaded from model" (llamacpp default, unknown) →
+        // the KV area simply stays 0 until the user sets a number.
         var ctx = parseInt(gv("ctxSize")) || 0;
         var layers = estimateLayers(model.totalB || 8);
         var kvDim = estimateKVDim(); // n_kv_heads × head_dim (GQA), not full hidden dim
+        // Empty cache types resolve to the LLAMA_CPP_DEFAULTS entry (f16).
+        var ctk = gv("cacheK") || LLD.cacheK;
+        var ctv = gv("cacheV") || LLD.cacheV;
         var ctxGB = ctx > 0
-            ? (layers * kvDim * ctx * (kvBytesFactor(gv("cacheK")) + kvBytesFactor(gv("cacheV")))) / 1e9
+            ? (layers * kvDim * ctx * (kvBytesFactor(ctk) + kvBytesFactor(ctv))) / 1e9
             : 0;
 
         // Drafter (MTP head or external draft model) only counts when a spec/draft
         // type is actually selected; with spec type "none" it takes no space.
-        var mtpGB = (gv("specType") && /MTP/i.test(gv("modelPath"))) ? activeGB * 0.05 : 0;
-        var imgGB = /mmproj/i.test(gv("modelPath")) ? 1.5 : 0;
+        var mtpGB = (gv("specType") && /MTP/i.test(estName())) ? activeGB * 0.05 : 0;
+        var imgGB = /mmproj/i.test(estName()) ? 1.5 : 0;
 
         return {
             totalB: model.totalB,
@@ -108,9 +130,14 @@
         };
     }
 
+    // UI number with fallback: explicit `fallback` arg if given, else the
+    // field's LLAMA_CPP_DEFAULTS entry (single source of truth).
     function getCap(id, fallback) {
         var v = parseFloat(gv(id));
-        return isNaN(v) ? fallback : v;
+        if (!isNaN(v)) return v;
+        if (fallback !== undefined) return fallback;
+        var d = parseFloat(LLD[id]);
+        return isNaN(d) ? 0 : d;
     }
 
     // ------------------------------------------------------------------
@@ -174,9 +201,7 @@
         // is the % of the (auto-estimated) area size that goes to VRAM, the
         // remainder to RAM.
         function pct(id) {
-            var v = parseFloat(gv(id));
-            if (isNaN(v)) v = 100;
-            return Math.max(0, Math.min(100, v)) / 100;
+            return Math.max(0, Math.min(100, gvNum(id))) / 100;
         }
         function split(a, p) {
             var t = a.vram + a.ram;
@@ -205,12 +230,12 @@
         // Reserve slices of VRAM for OS/driver, llama.cpp scratchpad, cuBLAS
         // workspace, and compute buffers. OS and cuBLAS are constant but
         // user-overridable (osOverhead / cublasOverhead inputs).
-        var osVram = getCap("osOverhead", 0.25);       // GB – OS / driver
-        var scratchFactor = getCap("scratchFactor", 0.025); // GB per PB – scratchpad scale
+        var osVram = getCap("osOverhead");             // GB – OS / driver (default from LLAMA_CPP_DEFAULTS)
+        var scratchFactor = getCap("scratchFactor");   // GB per PB – scratchpad scale
         var scratchVram = scratchFactor * (auto.totalB || 0); // GB – llama.cpp scratchpad
-        var cublasVram = getCap("cublasOverhead", 0.35); // GB – cuBLAS workspace
-        var batchSize = parseInt(gv("batchSize")) || 2048;
-        var ubatchSize = parseInt(gv("ubatchSize")) || 512;
+        var cublasVram = getCap("cublasOverhead");     // GB – cuBLAS workspace
+        var batchSize = gvNum("batchSize");             // empty → llama.cpp default (-b)
+        var ubatchSize = gvNum("ubatchSize");           // empty → llama.cpp default (-ub)
         // The ubatch is what actually lives on the GPU at once, so compute
         // buffers scale with ubatch and sit in VRAM; the batch size only
         // buffers work in RAM.
@@ -314,7 +339,7 @@
         el("autoCtx").textContent = (auto.ctx.vram + auto.ctx.ram).toFixed(1) + " GB";
         // Show the context length (in tokens) that corresponds to the VRAM share
         // of the KV cache — handy for reducing ctxSize so it fully fits in VRAM.
-        var ctxTokens = parseInt(gv("ctxSize")) || 0;
+        var ctxTokens = parseInt(gv("ctxSize")) || 0; // empty = model default, unknown → 0
         var ctxTotalGB = auto.ctx.vram + auto.ctx.ram;
         var ctxTokensInVram = ctxTotalGB > 0.0001 ? Math.round(ctxTokens * (areas.ctx.vram / ctxTotalGB)) : 0;
         el("ctxVramAmt").textContent = "\u2192 " + ctxTokensInVram.toLocaleString("en-US") + " tokens in VRAM";

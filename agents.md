@@ -17,11 +17,12 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
 | File | Role |
 |------|------|
-| `configtool.html` | Markup only. All form fields (bare — no `value`/``checked`/`selected` attributes), the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic_memory.js`, then `presets.js`, then `logic.js` (order matters — `logic.js` calls `MemEst.*` and reads `window.CONFIG_PRESETS`). |
-| `presets.js` | `window.CONFIG_PRESETS`: the **default preset** (`"default"`, full state) plus the built-in partial presets (`chat` / `fast` / `quality` / `embed`). All selectable from the Apply-preset dropdown ("default" included). Kept as `.js` (not fetched `.json`) because `file://` fetches are blocked; downloading a preset gives you the same JSON. |
+| `configtool.html` | Markup only. All form fields (bare — no `value`/``checked`/`selected` attributes; tooltips are applied from JS), the system panel, the memory panel, the output tabs. Links `style.css`, loads `logic_memory.js`, then `presets.js`, then `logic_cmdgenerator.js`, then `logic.js` (order matters — `logic.js` calls `MemEst.*` / `CmdGen.*` and reads `window.CONFIG_PRESETS`). |
+| `presets.js` | `window.LLAMA_CPP_DEFAULTS` + `window.LLAMA_CPP_DEFAULT_UNSET` + `window.LLAMA_CPP_DESCRIPTIONS` (per-field `--help` tooltip texts, same field-id keys as the presets) + `window.CONFIG_PRESETS`: the **default preset** (`"default"`, full state), the **llamacpp_defaults preset** (real `llama-server --help` defaults, built from `LLAMA_CPP_DEFAULTS`) and the built-in partial presets (`chat` / `fast` / `quality` / `embed`). All selectable from the Apply-preset dropdown ("default" included). Kept as `.js` (not fetched `.json`) because `file://` fetches are blocked; downloading a preset gives you the same JSON. |
 | `style.css` | All styling. CSS variables live in `:root`. Memory-bar classes are prefixed `mem-*`, system-panel `sys-*`. |
 | `logic_memory.js` | Memory size estimation + VRAM/RAM bar rendering, wrapped in an IIFE. Exposes `window.MemEst` (`updateMemBar`, `computeEstimates`, `parseModel`, `getCap`). Owns its own `gv`/`ck`/`el` DOM helpers. |
-| `logic.js` | All other behavior, wrapped in an IIFE. See function map below. Calls `MemEst.updateMemBar()` from `updateOutput()`. |
+| `logic_cmdgenerator.js` | All command-line logic, wrapped in an IIFE, exposed as `window.CmdGen` (`buildArgs`, `genBat`, `genPs1`, `genSh`, `genJson`). Long flag spellings only, reference emission order, one option per line in the rendered scripts (flag and value together), omission against `LLAMA_CPP_DEFAULTS`. Reads form state directly by id (like `logic_memory.js`). |
+| `logic.js` | All other behavior (presets, watermarks, gates, tabs, clipboard), wrapped in an IIFE. See function map below. Calls `MemEst.updateMemBar()` and `CmdGen.*` from `updateOutput()`. |
 
 ## How the pieces connect
 
@@ -35,34 +36,60 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
 ## Main functions (logic.js)
 
-**Argument building**
+**Argument building & script generation** (`logic_cmdgenerator.js`, `window.CmdGen`)
+- `CmdGen.buildArgs()` — assembles the ordered arg list + env lines + chat kwargs;
+  the single source of truth for what gets emitted. Rules (see the file header):
+  **long flag spellings only** (`--threads`, `--model`, `--n-gpu-layers`, `--cpu-moe`,
+  `--n-predict`, `--grammar-file`, `--model-draft`, …; `--flash-attn` carries the
+  explicit value `on`); emission order follows the reference cmd line (model/alias,
+  host/port, sampling, jinja/reasoning, slots/threads, ctx/offload/caches/load-mode,
+  batch, misc switches, speculative, extras); entries are raw token strings or
+  `[flag, value]` pairs (`arg()`).
+- `CmdGen.genBat/genPs1/genSh` — **one option per line**, flag and its value always
+  on the *same* line (`--model "path"`, never the value alone on the next line), via
+  `renderCmd()` with the proper continuation (` ^\r\n` bat / ` `\n` ps1 / ` \\\n` sh,
+  trailing `\` for sh).
+  Pair values are quoted with the style's quote char (`"` bat/ps1, `'` sh) when they
+  contain whitespace — never nested; a value already containing `"…` (user batch
+  syntax) gets single quotes; raw token strings (extraArgs) pass through verbatim.
+  The binary is always quoted (`"%~dp0\...\llama-server.exe"`). `--chat-template-kwargs`
+  is appended last, its JSON value quoted as one token.
+- `CmdGen.genJson` — structured config; `extra_args` only lists raw token strings
+  (pairs live in their own keys), plus `alias` next to `model`.
+- `isAtLld(id)` / `isUnset(id)` / `sameVal` / `numR` / `q` / `arg` — helpers inside
+  `logic_cmdgenerator.js` (not exported; logic.js keeps its own small `lld()` for
+  placeholders/batch clamping).
+
+**Presets & defaults** (logic.js)
 - `PRESETS` / `DEFAULT_PRESET` — read from `window.CONFIG_PRESETS` (defined in
   **`presets.js`**). `"default"` is the full-state **default preset**: `init()` applies it
   on startup, `resetAll()` restores it, it is selectable in the Apply-preset dropdown,
   and "Save preset" writes exactly this shape. `configtool.html` carries **no**
   `value`/`checked`/`selected` attributes — controls only get values from presets.
-- `DEFAULTS` — derived from `DEFAULT_PRESET` (`JSON.parse(JSON.stringify(...))`). A field
-  equal to its default is **omitted** from the command line (keeps output clean).
-  Exception: `--host`/`--port` are emitted whenever non-empty (they are per-machine
-  bind addresses, not omittable tuning params).
-- `isDefault(id)` — compares current value against `DEFAULTS`.
-- `buildArgs()` — assembles the ordered arg list + env lines + chat kwargs. This is the
-  single source of truth for what gets emitted.
+  Alongside it sits the **`llamacpp_defaults`** preset (real `llama-server --help`
+  defaults, built from `window.LLAMA_CPP_DEFAULTS`) — also selectable.
+- `DEFAULT_PRESET` — `PRESETS["default"]`, applied on startup and by Reset. Cmd-line
+  omission is **not** based on it (the old `DEFAULTS`-based omit was replaced by `LLD`).
+- `LLD` / `LLD_UNSET` — `window.LLAMA_CPP_DEFAULTS` / `window.LLAMA_CPP_DEFAULT_UNSET`
+  from `presets.js`: the real `llama-server --help` defaults for exactly the tool's
+  field ids (plus the tool-side estimator factors, so `logic_memory.js` has no
+  magic-number fallbacks). `""` = unset/auto. `LLD_UNSET` lists per-field
+  "unset" spellings (maxTokens `0`/`-1`, seed `-1`, reasoningBudget `-1`).
 - `roundToMultiple` / `clampBatch` — `ubatchSize` snaps to a multiple of 32 (min 32);
   `batchSize` must be an exact multiple of the current `ubatchSize` (min = ubatch).
   Clamping ubatch also re-clamps batch and updates the batch input's `min`/`step`
-  attributes to track the ubatch value.
-
-**Script generators** (each returns the full text for the active tab)
-- `genBat`, `genPs1`, `genSh`, `genJson` — format `buildArgs()` output. Python was removed.
-  `genJson` clamps `ncpu_moe_experts` to ≥ 0 (see gotchas). Note `ncpuMoe`
-  is a **count of experts** (not GB) and lives in the MoE Experts card of the
-  memory panel (like `ctxSize` in the KV cache card), not in the Model panel.
+  attributes to track the ubatch value. Empty inputs resolve via the LLD table.
+  Note `ncpuMoe` is a **count of experts** (not GB) and lives in the MoE Experts
+  card of the memory panel (like `ctxSize` in the KV cache card), not in the Model
+  panel; `genJson` clamps it to ≥ 0 (see gotchas).
 
 **Memory estimation + distribution bars** (all in `logic_memory.js`, exposed as `window.MemEst`)
-- `quantBytesPerWeight(model)` — bytes/weight from the quant tag in the filename
+- `estName()` — the model name driving the estimate: the `--alias` value
+  (`modelAlias` input) when set, else the filename (`modelPath`). All name-based
+  reads below go through it.
+- `quantBytesPerWeight(model)` — bytes/weight from the quant tag in the name
   (NVFP4/FP4, Q2–Q8, F16/BF16). Drives the scale-down of total size.
-- `parseModel(name)` — extracts `{ totalB, activeB, isMoE }` from the filename.
+- `parseModel(name)` — extracts `{ totalB, activeB, isMoE }` from the name.
   `27B` → 27B dense; `A8B` → 8B-active MoE; `30B-A3B` → 30B total / 3B active.
 - `estimateLayers`, `estimateEmbDim` — rough structural guesses from param count.
 - `kvBytesFactor(cacheType)` — KV-cache size factor per cache type. Covers all
@@ -146,14 +173,30 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   boxes (`sysVramManual`, `sysRamManual`, etc.) that the memory bars read via `getCap`.
   WebGPU was removed.
 
-**Presets**
+**Preset apply / save / load** (logic.js)
 - `FIELD_IDS` — list of every persisted field id.
 - `collectState` / `applyPresetState` — snapshot / restore all fields
   (`applyPresetState` does **not** call `updateOutput`; callers do).
 - `savePreset` / `loadPresetFile` — download / read a `.json` preset via file selection.
-- `applyPreset(name)` — built-in presets (default / myconfig / chat / fast / quality /
-  embed); `myconfig` only shows a toast (presets load via file), `default` applies the
-  full default preset like Reset does (system-detection inputs keep their values).
+- `applyPreset(name)` — built-in presets (default / **llamacpp_defaults** / myconfig /
+  chat / fast / quality / embed); `myconfig` only shows a toast (presets load via file),
+  `default` applies the full default preset like Reset does (system-detection inputs
+  keep their values). Applying `llamacpp_defaults` sets `lldMode = "lld"` (watermarks on).
+- `applyLldDescriptions()` — applies `window.LLAMA_CPP_DESCRIPTIONS` (presets.js, same
+  keys as the presets; tool-only fields prefixed `tool:`) as `title` tooltips on every
+  control, appending `— default: <LLD value>` (checkboxes: `— default (checked):
+  <bool>`) only when the description does not already state a default. Runs
+  once from `init()`; it **overwrites** any hand-written `title` in the HTML, which is
+  why `configtool.html` now carries no `title` attributes on tracked fields (single
+  source of truth). Controls without a map entry keep theirs.
+- `updateLldHints(mode)` — placeholder (watermark) switching, values untouched. In
+  `"lld" mode"` every LLD-tracked text/number input shows its llama.cpp default as
+  placeholder (empty defaults get spellings from `LLD_WATERMARKS`, e.g. `"loaded from
+  model"`, `"inf (-1)"`); in `"tool" mode` the stock placeholders (captured once by
+  `capturePlaceholders()` in `init()`) are restored. Checkboxes, selects and sliders are
+  skipped — selects cannot show a watermark, so they keep their default option selected
+  and the HTML lists the default **first** (loadMode `auto`, cacheK/V `f16`, estImgLoc
+  VRAM, lazyMode `auto`); sliders carry numeric values (readouts resolve empty → LLD).
 - `resetAll` / `clearAll` — restore the default preset / wipe everything.
 - `globalPresets()` — grabs `window.CONFIG_PRESETS`, toasts an error if `presets.js`
   failed to load (tool then runs with bare, empty controls).
@@ -181,8 +224,16 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `parseModel` uses a lookbehind regex (`(?<![A0-9.])`), which needs a modern browser.
 - The VRAM and RAM bars are independent: each is scaled to its own capacity (not a shared
   scale), so a bar that is full always spans the full width.
-- Adding a new field that affects the command line: update `buildArgs()` **and** `DEFAULTS`
-  (so it's omitted when at default) **and** `FIELD_IDS` (so it round-trips in presets).
+- Adding a new field that affects the command line: update `buildArgs()` **and**
+  `LLAMA_CPP_DEFAULTS` in `presets.js` (its real `--help` default, `""` if unset/auto —
+  this drives both omission and the watermark) **and** `FIELD_IDS` (so it round-trips in
+  presets). If its default is spelled differently in the tool (e.g. `0` vs `-1`), add a
+  `LLAMA_CPP_DEFAULT_UNSET` entry.
+- **No magic-number fallbacks:** defaults live only in `LLAMA_CPP_DEFAULTS`. UI reads
+  resolve through `isAtLld`/`numR` (logic.js) or `getCap`/`gvNum` (logic_memory.js),
+  which fall back to the table when the field is empty. The VRAM/RAM capacity guesses
+  (`sysVramManual` 16 / `sysRamManual` 64) are detection fallbacks, not defaults, and
+  stay at their call sites.
 - **`lazyMode`** (`--lazy-mode`, select `auto`/`on`/`off`, default `off` → omitted) sits
   next to `loadMode` in the Model & Server panel; on-demand reading of large tensors
   (e.g. per-layer token embeddings). **`lazyMode` is gated on `loadMode === "mmap"`**

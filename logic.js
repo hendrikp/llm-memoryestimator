@@ -12,13 +12,22 @@
     // Presets live in presets.js (window.CONFIG_PRESETS), including the
     // "default" preset: the single source of truth for the tool's initial
     // state. It is applied on startup, restored by Reset, selectable in the
-    // Apply-preset dropdown, and `DEFAULTS` (used to omit at-default params
-    // from the cmd line) is derived from it — configtool.html carries no
-    // value/checked/selected attributes at all.
+    // Apply-preset dropdown — configtool.html carries no value/checked/
+    // selected attributes at all. Cmd-line omission is NOT based on this
+    // preset but on `LLD` (window.LLAMA_CPP_DEFAULTS): only options whose
+    // value differs from the real llama-server default are emitted.
     // ------------------------------------------------------------------
     var PRESETS = globalPresets();
     var DEFAULT_PRESET = PRESETS["default"] || {};
-    var DEFAULTS = DEFAULT_PRESET;
+
+    // Real llama-server cmd-line defaults (presets.js). Here they drive the
+    // watermark placeholders, slider readouts and batch-clamp fallbacks; the
+    // omission logic and script rendering live in logic_cmdgenerator.js
+    // (CmdGen). "tool" = tool-default preset state (plain placeholder).
+    var LLD = window.LLAMA_CPP_DEFAULTS || {};
+    var LLD_DESC = window.LLAMA_CPP_DESCRIPTIONS || {};
+    var PLACEHOLDERS = {};
+    var lldMode = "tool";
 
     function globalPresets() {
         if (!window.CONFIG_PRESETS || !window.CONFIG_PRESETS["default"]) {
@@ -29,8 +38,90 @@
         return window.CONFIG_PRESETS;
     }
 
-    function isDefault(id) {
-        return gv(id) === DEFAULTS[id];
+    function lld(id) { return LLD[id]; }
+
+    // Placeholder (watermark) ids: text/number inputs only - selects keep
+    // their default option selected (no empty option / no watermark possible),
+    // sliders show their value in the label.
+    var LLD_PLACEHOLDER_IDS = [
+        "ctxSize", "ngl", "threads", "parallel", "host", "port",
+        "repLastN", "maxTokens", "seed", "reasoningBudget",
+        "specDraftNMax", "specDraftPMin"
+    ];
+
+    // Remember the stock placeholders once, before any preset touches them.
+    function capturePlaceholders() {
+        FIELD_IDS.concat(LLD_PLACEHOLDER_IDS).forEach(function(id) {
+            var e = el(id);
+            if (e && !(id in PLACEHOLDERS)) PLACEHOLDERS[id] = e.placeholder || "";
+        });
+    }
+
+    // Watermark spellings for defaults that are "auto / unset" (stored as
+    // "" in the table) and therefore not self-explanatory.
+    var LLD_WATERMARKS = {
+        ctxSize: "loaded from model",
+        ngl: "auto",
+        threads: "auto (-1)",
+        parallel: "auto (-1)",
+        maxTokens: "inf (-1)",
+        seed: "random (-1)",
+        reasoningBudget: "unrestricted (-1)"
+    };
+
+    // Switch watermark placeholders on/off. In "lld" mode (the
+    // llamacpp_defaults preset is applied) tracked inputs show their llama.cpp
+    // default as watermark; in "tool" mode the stock placeholders are
+    // restored. Values are never rewritten here — only placeholders.
+    function updateLldHints(mode) {
+        lldMode = mode;
+        var map = {};
+        Object.keys(LLD).forEach(function(k) { map[k] = String(LLD[k]); });
+        Object.keys(LLD_WATERMARKS).forEach(function(k) {
+            if (map[k] === "" || map[k] === undefined) map[k] = LLD_WATERMARKS[k];
+        });
+        FIELD_IDS.concat(LLD_PLACEHOLDER_IDS).forEach(function(id) {
+            var e = el(id);
+            if (!e || e.type === "checkbox" || e.tagName === "SELECT" || e.type === "range") return;
+            if (mode === "lld" && id in map && map[id] !== "") e.placeholder = map[id];
+            else if (id in PLACEHOLDERS) e.placeholder = PLACEHOLDERS[id];
+        });
+    }
+
+    // Apply the help-derived descriptions (presets.js,
+    // window.LLAMA_CPP_DESCRIPTIONS — same keys as the presets) as `title`
+    // tooltips on every control. The resolved default from LLAMA_CPP_DEFAULTS
+    // is appended only when the description does not state one already.
+    // Overwrites any hand-written title in the HTML (the table is the
+    // single source of truth); controls without an entry keep theirs.
+    function applyLldDescriptions() {
+        Object.keys(LLD_DESC).forEach(function(id) {
+            var e = el(id);
+            if (!e) return;
+            var title = LLD_DESC[id];
+            var d = LLD[id];
+            if (title.indexOf("default") === -1) {
+                if (e.type === "checkbox") {
+                    if (d !== undefined) title += " — default (checked): " + (!!d);
+                } else if (d !== undefined && d !== "") {
+                    title += " — default: " + d;
+                }
+            }
+            e.title = title;
+        });
+    }
+
+    // Sliders cannot be blanked (a range input always holds a value), so
+    // applying a numeric preset must also snap any slider it leaves empty
+    // back to its default position. Drives both the temp/top-P/... value
+    // labels and the est* placement sliders via updateOutput().
+    function restoreSliderPositions(state) {
+        Object.keys(state || {}).forEach(function(id) {
+            var e = el(id);
+            if (!e || e.type !== "range" || gv(id) !== "") return;
+            var d = parseFloat(state[id]);
+            if (!isNaN(d)) e.value = state[id];
+        });
     }
 
     // Batch sizing rules: ubatchSize snaps to a multiple of 32 (min 32);
@@ -49,156 +140,25 @@
         var e = el(id);
         var v = parseFloat(e.value);
         if (id === "ubatchSize") {
-            if (isNaN(v)) v = DEFAULTS.ubatchSize;
+            if (isNaN(v)) v = parseFloat(lld("ubatchSize"));
             e.value = roundToMultiple(v, 32, 32);
             // Keep the batch input and its value consistent with the new ubatch.
             var b = el("batchSize");
             b.min = e.value;
             b.step = e.value;
             var bv = parseFloat(b.value);
-            b.value = isNaN(bv) ? DEFAULTS.batchSize : roundToMultiple(bv, parseInt(e.value, 10), parseInt(e.value, 10));
+            b.value = isNaN(bv) ? parseFloat(lld("batchSize")) : roundToMultiple(bv, parseInt(e.value, 10), parseInt(e.value, 10));
             return;
         }
         // batchSize: multiple of the (already clamped) ubatch size.
         var u = getUbatch();
-        if (isNaN(v)) v = DEFAULTS.batchSize;
+        if (isNaN(v)) v = parseFloat(lld("batchSize"));
         e.value = roundToMultiple(v, u, u);
     }
 
-    // ------------------------------------------------------------------
-    // Build the argument list. Params at default are omitted.
-    // ------------------------------------------------------------------
-    function buildArgs() {
-        var args = [];
-        var envLines = gv("envVars") ? gv("envVars").split("\n").filter(function(l) { return l.trim(); }) : [];
-
-        if (gv("modelPath")) args.push("-m " + gv("modelPath"));
-        if (!isDefault("ctxSize")) args.push("-c " + gv("ctxSize"));
-        if (!isDefault("ngl")) args.push("-ngl " + gv("ngl"));
-        var ncpuMoe = Math.max(0, num("ncpuMoe") || 0);
-        if (ncpuMoe > 0) args.push("-ncpu-moe");
-        if (!isDefault("threads")) args.push("-t " + gv("threads"));
-        if (!isDefault("loadMode")) args.push("--load-mode " + gv("loadMode"));
-        if (gv("loadMode") === "mmap" && gv("lazyMode") && !isDefault("lazyMode")) args.push("--lazy-mode " + gv("lazyMode"));
-        if (!isDefault("cacheK")) args.push("--cache-type-k " + gv("cacheK"));
-        if (!isDefault("cacheV")) args.push("--cache-type-v " + gv("cacheV"));
-        if (!isDefault("batchSize")) args.push("--batch-size " + gv("batchSize"));
-        if (!isDefault("ubatchSize")) args.push("--ubatch-size " + gv("ubatchSize"));
-        if (gv("host")) args.push("--host " + gv("host"));
-        if (gv("port")) args.push("--port " + gv("port"));
-        if (!isDefault("parallel")) args.push("--parallel " + gv("parallel"));
-        if (!isDefault("mainGpu")) args.push("--main-gpu " + gv("mainGpu"));
-        if (gv("tensorSplit")) args.push("--tensor-split " + gv("tensorSplit"));
-        if (gv("overrideTensor")) args.push("--override-tensor " + gv("overrideTensor"));
-
-        if (ck("flashAttn")) args.push("--flash-attn on");
-        if (ck("jinja")) args.push("--jinja");
-        if (ck("noKvOffload")) args.push("--no-kv-offload");
-        if (ck("noMmprojOffload")) args.push("--no-mmproj-offload");
-        if (ck("promptCache")) args.push("--prompt-cache " + (gv("promptCachePath") || "cache.bin"));
-        if (ck("verbose")) args.push("-v");
-        if (gv("loraPath")) args.push("--lora " + gv("loraPath"));
-        if (gv("grammarFile")) args.push("--grammar " + gv("grammarFile"));
-
-        if (!isDefault("specType")) args.push("--draft " + gv("specType") + (gv("draftModel") ? " " + gv("draftModel") : ""));
-        if (gv("draftModel") && isDefault("specType")) args.push("--draft " + gv("draftModel"));
-        if (!isDefault("specDraftNMax")) args.push("--draft-n-max " + gv("specDraftNMax"));
-        if (!isDefault("specDraftPMin")) args.push("--draft-p-min " + gv("specDraftPMin"));
-        if (gv("specTypeK")) args.push("--draft-type-k " + gv("specTypeK"));
-        if (gv("specTypeV")) args.push("--draft-type-v " + gv("specTypeV"));
-
-        if (!isDefault("temp")) args.push("--temp " + gv("temp"));
-        if (!isDefault("topP")) args.push("--top-p " + gv("topP"));
-        if (!isDefault("topK")) args.push("--top-k " + gv("topK"));
-        if (!isDefault("minP")) args.push("--min-p " + gv("minP"));
-        if (!isDefault("presPen")) args.push("--presence-penalty " + gv("presPen"));
-        if (!isDefault("repPen")) args.push("--repeat-penalty " + gv("repPen"));
-        if (!isDefault("freqPen")) args.push("--frequency-penalty " + gv("freqPen"));
-        if (!isDefault("repLastN")) args.push("--repeat-last-n " + gv("repLastN"));
-        if (!isDefault("maxTokens")) args.push("-n " + gv("maxTokens"));
-        if (!isDefault("seed")) args.push("--seed " + gv("seed"));
-
-        if (!isDefault("reasoningBudget")) args.push("--reasoning-budget " + gv("reasoningBudget"));
-        if (ck("reasoningPreserve")) args.push("--reasoning-preserve");
-
-        if (gv("extraArgs")) args.push(gv("extraArgs"));
-
-        var kwargs = [];
-        if (gv("chatKwargs")) kwargs.push(gv("chatKwargs"));
-
-        return { args: args, envLines: envLines, kwargs: kwargs };
-    }
-
-    // ------------------------------------------------------------------
-    // Script generators. Each returns the full text for one tab.
-    // ------------------------------------------------------------------
-    function shellQuote(s) {
-        s = s.replace(/'/g, "'\\''");
-        return "'" + s + "'";
-    }
-
-    function genBat(binary, args, envLines, kwargs) {
-        var lines = ["@echo off", "REM generated by configtool — " + new Date().toISOString().slice(0, 10), ""];
-        envLines.forEach(function(l) { lines.push("set " + l); });
-        if (envLines.length) lines.push("");
-        lines.push(binary + " " + args.join(" ") + (kwargs.length ? " --chat-template-kwargs " + kwargs.join(" ") : ""));
-        lines.push("");
-        lines.push("pause");
-        return lines.join("\r\n");
-    }
-
-    function genPs1(binary, args, envLines, kwargs) {
-        var lines = ["# generated by configtool — " + new Date().toISOString().slice(0, 10), ""];
-        envLines.forEach(function(l) {
-            var eq = l.indexOf("=");
-            lines.push("$env:" + l.slice(0, eq) + " = " + l.slice(eq + 1));
-        });
-        if (envLines.length) lines.push("");
-        lines.push("& " + binary + " " + args.join(" ") + (kwargs.length ? " --chat-template-kwargs " + kwargs.join(" ") : ""));
-        return lines.join("\r\n");
-    }
-
-    function genSh(binary, args, envLines, kwargs) {
-        var lines = ["#!/usr/bin/env bash", "# generated by configtool — " + new Date().toISOString().slice(0, 10), "set -euo pipefail", ""];
-        envLines.forEach(function(l) { lines.push("export " + l); });
-        if (envLines.length) lines.push("");
-        lines.push(binary + " " + args.join(" ") + (kwargs.length ? " --chat-template-kwargs " + kwargs.join(" ") : ""));
-        lines.push("");
-        lines.push("# chmod +x run-server.sh && ./run-server.sh");
-        return lines.join("\n");
-    }
-
-    function genJson(binary, args, envLines, kwargs) {
-        var cfg = {
-            binary: binary,
-            model: gv("modelPath") || null,
-            context: parseInt(gv("ctxSize")) || null,
-            gpu_layers: gv("ngl") || null,
-            ncpu_moe_experts: Math.max(0, num("ncpuMoe") || 0),
-            threads: parseInt(gv("threads")) || null,
-            server: {
-                host: gv("host") || null,
-                port: parseInt(gv("port")) || null,
-                parallel: parseInt(gv("parallel")) || null
-            },
-            sampling: {
-                temperature: parseFloat(gv("temp")),
-                top_p: parseFloat(gv("topP")),
-                top_k: parseInt(gv("topK")),
-                min_p: parseFloat(gv("minP")),
-                presence_penalty: parseFloat(gv("presPen")),
-                repeat_penalty: parseFloat(gv("repPen")),
-                frequency_penalty: parseFloat(gv("freqPen")),
-                repeat_last_n: parseInt(gv("repLastN")),
-                max_tokens: parseInt(gv("maxTokens")) || null,
-                seed: parseInt(gv("seed"))
-            },
-            env: envLines,
-            extra_args: args.slice(1)
-        };
-        if (kwargs.length) cfg.chat_template_kwargs = kwargs[0];
-        return JSON.stringify(cfg, null, 2);
-    }
+    // (Cmd-line generation lives in logic_cmdgenerator.js — window.CmdGen:
+    // buildArgs + genBat / genPs1 / genSh / genJson, called from
+    // updateOutput().)
 
     // ------------------------------------------------------------------
     // System detection (WebGL GPU name only — display, not overridable).
@@ -248,21 +208,26 @@
     // Output tabs.
     // ------------------------------------------------------------------
     function updateOutput() {
-        // Slider value displays.
-        el("tempVal").textContent = parseFloat(gv("temp")).toFixed(2);
-        el("topPVal").textContent = parseFloat(gv("topP")).toFixed(2);
-        el("minPVal").textContent = parseFloat(gv("minP")).toFixed(2);
-        el("presPenVal").textContent = parseFloat(gv("presPen")).toFixed(2);
-        el("repPenVal").textContent = parseFloat(gv("repPen")).toFixed(2);
-        el("freqPenVal").textContent = parseFloat(gv("freqPen")).toFixed(2);
+        // Slider value displays — an empty slider reads as its llama.cpp
+        // default (resolved from LLD, no hardcoded numbers here).
+        [["tempVal", "temp"], ["topPVal", "topP"], ["minPVal", "minP"],
+         ["presPenVal", "presPen"], ["repPenVal", "repPen"], ["freqPenVal", "freqPen"]]
+        .forEach(function(p) {
+            var v = gv(p[1]);
+            if (v === "") v = lld(p[1]);
+            el(p[0]).textContent = parseFloat(v).toFixed(2);
+        });
 
-        var built = buildArgs();
-        var binary = gv("binaryPath") || "llama-server";
+        updateLldHints(lldMode);
+        // Cmd-line assembly & rendering: logic_cmdgenerator.js (CmdGen).
+        var built = CmdGen.buildArgs();
+        // Empty binary resolves to the defaults table (LLD.binaryPath).
+        var binary = gv("binaryPath") || lld("binaryPath") || "llama-server";
         var text = "";
-        if (currentTab === "bat") text = genBat(binary, built.args, built.envLines, built.kwargs);
-        else if (currentTab === "ps1") text = genPs1(binary, built.args, built.envLines, built.kwargs);
-        else if (currentTab === "sh") text = genSh(binary, built.args, built.envLines, built.kwargs);
-        else text = genJson(binary, built.args, built.envLines, built.kwargs);
+        if (currentTab === "bat") text = CmdGen.genBat(binary, built.args, built.envLines, built.kwargs);
+        else if (currentTab === "ps1") text = CmdGen.genPs1(binary, built.args, built.envLines, built.kwargs);
+        else if (currentTab === "sh") text = CmdGen.genSh(binary, built.args, built.envLines, built.kwargs);
+        else text = CmdGen.genJson(binary, built.args, built.envLines, built.kwargs);
         el("outputContent").textContent = text;
 
         MemEst.updateMemBar();
@@ -329,7 +294,7 @@
     // Presets: collect / apply / save / load.
     // ------------------------------------------------------------------
     var FIELD_IDS = [
-        "modelPath", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "lazyMode", "cacheK", "cacheV",
+        "modelPath", "modelAlias", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "lazyMode", "cacheK", "cacheV",
         "batchSize", "ubatchSize", "host", "port", "parallel", "mainGpu", "tensorSplit", "overrideTensor",
         "binaryPath", "envVars",
         "flashAttn", "jinja", "noKvOffload", "noMmprojOffload", "promptCache", "promptCachePath", "verbose",
@@ -364,10 +329,12 @@
         });
     }
 
-    // PRESETS (default/chat/fast/quality/embed) come from presets.js.
-    // Presets other than "default" are partial diffs — fields they omit are
-    // left untouched. "default" is a full preset, so applying it is the same
-    // as Reset (minus clearing the system-detection inputs).
+    // PRESETS (default / llamacpp_defaults / chat / fast / quality / embed)
+    // come from presets.js. Presets other than "default" are partial diffs —
+    // fields they omit are left untouched. "default" is a full preset, so
+    // applying it is the same as Reset (minus clearing the system-detection
+    // inputs); "llamacpp_defaults" is also full and switches on the
+    // llama.cpp-default watermarks (updateLldHints).
     function applyPreset(name) {
         if (name === "myconfig") {
             showToast("Use “Load preset” to restore your saved config");
@@ -376,7 +343,11 @@
         var p = PRESETS[name];
         if (!p) return;
         applyPresetState(p);
+        restoreSliderPositions(p);
         syncGates();
+        // The llamacpp_defaults preset switches on the llama.cpp-default
+        // watermarks; every other preset restores the stock placeholders.
+        updateLldHints(name === "llamacpp_defaults" ? "lld" : "tool");
         updateOutput();
         showToast("Preset applied: " + name);
     }
@@ -392,6 +363,7 @@
             try {
                 applyPresetState(JSON.parse(reader.result));
                 syncGates();
+                updateLldHints("tool"); // a loaded file is tool-state, not lld-watermarks
                 updateOutput();
                 showToast("Preset loaded");
             } catch (e) {
@@ -402,8 +374,8 @@
     }
 
     // lazyMode requires mmap: keep the select disabled and snapped to "off"
-    // whenever the load mode is not mmap (see buildArgs, which also refuses
-    // to emit --lazy-mode in that case).
+    // whenever the load mode is not mmap (see CmdGen.buildArgs, which also
+    // refuses to emit --lazy-mode in that case).
     function lazyGate() {
         var lzm = el("lazyMode");
         if (gv("loadMode") !== "mmap") {
@@ -436,6 +408,7 @@
             if (el(id)) el(id).value = "";
         });
         syncGates();
+        updateLldHints("tool");
         updateOutput();
     }
 
@@ -448,6 +421,7 @@
         });
         el("ncpuMoe").value = "0";
         syncGates();
+        updateLldHints("tool");
         updateOutput();
     }
 
@@ -506,6 +480,10 @@
     }
 
     function init() {
+        // Capture stock placeholders before any preset/preset-mode touches them.
+        capturePlaceholders();
+        // Help-derived tooltips (window.LLAMA_CPP_DESCRIPTIONS, presets.js).
+        applyLldDescriptions();
         // Load the default preset on startup: the JSON above is the single
         // source of truth for initial state (the HTML ships bare controls).
         applyPresetState(DEFAULT_PRESET);
