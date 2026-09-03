@@ -101,7 +101,7 @@
         var activeGB = (model.isMoE ? model.activeB : model.totalB) * bytes;
         var moeGB = model.isMoE ? Math.max(0, totalGB - activeGB) : 0;
 
-        // Expert geometry from the MoE card. `-ncpu-moe N` / `--cpu-moe` and the
+        // Expert geometry from the MoE card. `--n-cpu-moe N` / `--cpu-moe` and the
         // MoE placement slider can only be costed when the total expert count
         // and the size of ONE expert are known: with both filled in, the experts
         // area is exactly n × size and `cpu` costs N × size. With either empty
@@ -113,7 +113,7 @@
         var expertSized = expertCount > 0 && expertSize > 0;
         if (expertSized) moeGB = expertCount * expertSize;
         // Experts kept in CPU RAM: --cpu-moe means "all of them", otherwise the
-        // -ncpu-moe count (clamped to the model's expert count).
+        // --n-cpu-moe count (clamped to the model's expert count).
         var cpuExperts = ck("cpuMoe") ? expertCount
             : Math.max(0, Math.min(expertCount, parseInt(gv("ncpuMoe"), 10) || 0));
 
@@ -137,8 +137,18 @@
             : 0;
 
         // Drafter (MTP head or external draft model) only counts when a spec/draft
-        // type is actually selected; with spec type "none" it takes no space.
-        var mtpGB = (gv("specType") && /MTP/i.test(estName())) ? activeGB * 0.05 : 0;
+        // type other than "none" is actually selected. Its size is the GB value
+        // entered under the spec-type dropdown; with that field empty it falls
+        // back to the name-derived guess (≈ 5 % of the active weights for MTP
+        // models, order of magnitude only) — mirroring how the MoE card uses the
+        // expert geometry when typed in, the model name otherwise.
+        var specType = gv("specType");
+        var specActive = specType !== "" && specType !== "none";
+        var specManual = parseFloat(gv("specDraftGB"));
+        var specSized = !isNaN(specManual) && specManual > 0;
+        var mtpGB = specActive
+            ? (specSized ? specManual : (/MTP/i.test(estName()) ? activeGB * 0.05 : 0))
+            : 0;
         var imgGB = /mmproj/i.test(estName()) ? 1.5 : 0;
 
         return {
@@ -151,6 +161,8 @@
             expertSize: expertSize,
             expertSized: expertSized,
             cpuExperts: cpuExperts,
+            specActive: specActive,
+            specSized: specSized,
             layers: { vram: activeGB, ram: 0 },
             moe: { vram: moeGB, ram: 0 },
             other: { vram: otherGB, ram: 0 },
@@ -193,7 +205,7 @@
     };
     // Single order shared by the bars and the legend: segments appear in the
     // same order in the VRAM bar, the RAM bar, and the legend below them.
-    var BAR_ORDER = ["os", "scratch", "cublas", "ubatch", "layers", "moe", "other", "ctx", "mtp", "img", "batch"];
+    var BAR_ORDER = ["os", "scratch", "cublas", "ubatch", "batch", "layers", "moe", "other", "ctx", "mtp", "img"];
 
     function makeSwatch(cls) {
         // Carries the `mem-seg <cls>` classes so the swatch picks up the exact
@@ -350,11 +362,15 @@
         details.moe = auto.expertSized
             ? (auto.expertCount + " experts \u00d7 " + auto.expertSize + " GB"
                + (ck("cpuMoe") ? ", all on CPU (--cpu-moe)"
-                  : auto.cpuExperts > 0 ? ", " + auto.cpuExperts + " on CPU (--ncpu-moe)" : ", all on GPU"))
+                  : auto.cpuExperts > 0 ? ", " + auto.cpuExperts + " on CPU (--n-cpu-moe)" : ", all on GPU"))
             : "estimated from the model name";
         details.other = auto.expertSized
             ? (auto.totalGB.toFixed(1) + " GB model \u2212 main layers \u2212 experts")
             : "set the expert count + size to measure this";
+        details.mtp = auto.specActive
+            ? (auto.specSized ? "entered drafter size"
+                              : "estimated \u2014 enter the GB under the spec type to override")
+            : "no spec type selected";
         // Resolve the GB amounts for every area, for both destinations.
         function segGB(k) {
             if (k in areas) return areas[k];
@@ -439,7 +455,7 @@
         if (auto.expertCount > 0) {
             moeTxt += auto.cpuExperts > 0
                 ? " \u00b7 " + auto.cpuExperts + " on CPU ("
-                  + (ck("cpuMoe") ? "--cpu-moe" : "--ncpu-moe") + ")"
+                  + (ck("cpuMoe") ? "--cpu-moe" : "--n-cpu-moe") + ")"
                 : " \u00b7 all on GPU";
         }
         el("autoMoe").textContent = moeTxt;
@@ -463,7 +479,8 @@
         // Drafter state lives in this readout (its Loc row was dropped): the head
         // is always in VRAM when a spec type is active.
         var mtpGB = auto.mtp.vram + auto.mtp.ram;
-        el("autoMtp").textContent = mtpGB.toFixed(1) + " GB" + (mtpGB > 0.0005 ? " \u00b7 VRAM" : " \u00b7 inactive");
+        el("autoMtp").textContent = mtpGB.toFixed(1) + " GB"
+            + (mtpGB > 0.0005 ? (auto.specSized ? " \u00b7 VRAM \u00b7 entered" : " \u00b7 VRAM \u00b7 estimated") : " \u00b7 inactive");
         el("autoImg").textContent = (auto.img.vram + auto.img.ram).toFixed(1) + " GB";
 
         // Keep the slider readouts in sync. The MoE slider reads a number of

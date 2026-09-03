@@ -141,7 +141,6 @@
                             <div class="lbl">Speculative Drafter</div>
                             <div class="row"><label for="specType">Spec</label>
                                 <select id="specType">
-                                    <option value="">&mdash; none &mdash;</option>
                                     <option value="none">none</option>
                                     <option value="draft-simple">draft-simple</option>
                                     <option value="draft-eagle3">draft-eagle3</option>
@@ -155,6 +154,7 @@
                                     <option value="ngram-cache">ngram-cache</option>
                                 </select>
                             </div>
+                            <div class="row"><label for="specDraftGB">GB</label><input type="number" id="specDraftGB" min="0" step="0.001" placeholder="0 = estimate"><span class="hint-inline">drafter size</span></div>
                             <div class="auto" id="autoMtp">auto</div>
                         </div>
                         <div class="mem-est">

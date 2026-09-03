@@ -40,7 +40,7 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `CmdGen.buildArgs()` — assembles the ordered arg list + env lines + chat kwargs;
   the single source of truth for what gets emitted. Rules (see the file header):
   **long flag spellings only** (`--threads`, `--model`, `--n-gpu-layers`, `--cpu-moe`,
-  `--ncpu-moe`,
+  `--n-cpu-moe`,
   `--n-predict`, `--grammar-file`, `--model-draft`, …; `--flash-attn` carries the
   explicit value `on`); emission order follows the reference cmd line (model/alias,
   host/port, sampling, jinja/reasoning, slots/threads, ctx/offload/caches/load-mode,
@@ -100,13 +100,14 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   `layers` (non-MoE / active params), `moe` (experts), `other` (leftover model tensors,
   e.g. per-layer ngram/embeddings), `ctx` (KV cache), `mtp` (MTP head), `img` (vision),
   plus the raw inputs (`totalGB`, `expertCount`, `expertSize`, `expertSized`,
-  `cpuExperts` — `--cpu-moe` implies *all*) that bar tooltips and the card readouts
-  use to explain where a number came from.
+  `cpuExperts` — `--cpu-moe` implies *all*, `specActive` / `specSized` for the
+  drafter) that bar tooltips and the card readouts use to explain where a number
+  came from.
 - **Expert geometry drives the MoE area:** `moeExperts` (total expert count) and
   `moeExpertGB` (size of ONE expert, GB) in the MoE Experts card. With **both** filled
-  in, the experts area is exactly `n × size` (this is what makes `-ncpu-moe N` /
+  in, the experts area is exactly `n × size` (this is what makes `--n-cpu-moe N` /
   `--cpu-moe` and the MoE slider costable), the `autoMoe` readout appends
-  `· C on CPU (--ncpu-moe|--cpu-moe)` (or `· all on GPU`), and the leftover
+  `· C on CPU (--n-cpu-moe|--cpu-moe)` (or `· all on GPU`), and the leftover
   `totalGB − activeGB − n×size` becomes the **other** area (0 when the geometry is not
   filled in — with name-derived experts the subtraction would be 0 by construction).
   With either field empty/0 the experts area falls back to the name-derived
@@ -116,14 +117,18 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   `estMoePct`, `estCtxPct`, 0–100 % to VRAM, default 100; **`estOtherPct` is the
   exception** — a three-stage −100…+100 scale, see *Three-stage placement* below):
   the slider splits the
-  auto-estimated area size proportionally between VRAM and RAM. The MTP head is
-  **always fully in VRAM** (no control) but only when a spec/draft type is selected
-  (`specType` non-empty); with spec type "none" it takes **no space**. The
+  auto-estimated area size proportionally between VRAM and RAM. The drafter is
+  **always fully in VRAM** (no control) but only when a spec/draft type other than
+  **`none`** is selected (`none` is the select's first/default option and takes
+  **no space**). Its **size** is the `specDraftGB` input in the Speculative Drafter
+  card (0/empty = fall back to the name-derived ≈ 5 % of active weights for MTP
+  models — the tool-side "type + manual size, name as fallback" pattern of the MoE
+  card). The
   image/vision layer is **all-or-nothing** via the `estImgLoc` select (`vram` /
-  `ram`). The old `placeAreas()` (ngl/ncpu-moe based) and the `est*Vram`/`est*Ram`
+  `ram`). The old `placeAreas()` (ngl/--n-cpu-moe based) and the `est*Vram`/`est*Ram`
   GB override boxes were removed; `-ngl` still only affects the generated command
   line, but the MoE expert placement **does** feed the bars: with the expert count
-  known, `-ncpu-moe` and the MoE slider are synced and both drive the experts split —
+  known, `--n-cpu-moe` and the MoE slider are synced and both drive the experts split —
   and through it the scratchpad (see the SCR formula below).
 - **Fixed overhead segments on the VRAM bar:** OS/driver (`osOverhead` input,
   default 0.25 GB), scratchpad SCR = `scratchFactor × <params in VRAM>` where the
@@ -187,7 +192,8 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   “model − layers − experts” size row and the `VRAM · RAM · SSD` hint row in the Other
   Layers card (both folded into the `estOtherPct` tooltip) and the MTP card's
   `Loc | VRAM (only when drafter active)` row (in the `specType` tooltip; the state
-  itself is now stated by `autoMtp`: `0.8 GB · VRAM` / `0.0 GB · inactive`).
+  itself is now stated by `autoMtp`: `0.8 GB · VRAM · estimated` / `1.7 GB · VRAM ·
+  entered` / `0.0 GB · inactive`).
 - **Layout inside the mem-est grid:** each area card now contains its related controls
   inline: `ngl` sits above the Model Layers slider; the MoE Experts card holds the
   expert geometry (`moeExperts` = n, `moeExpertGB` = size of one expert) above the
@@ -199,15 +205,18 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   plus its `autoOther` state line — the area size is derived (`model size − layers −
   experts`, stated in the tooltip), so it has no size input; it sits between the MoE and
   the KV card; `cacheK`/`cacheV` selects and the
-  `noKvOffload` checkbox sit above the KV cache slider; the `specType` select sits in
-  the MTP Head card (its `autoMtp` state line below) — it was moved out of the Speculative
+  `noKvOffload` checkbox sit above the KV cache slider; the Speculative Drafter
+  card holds the `specType` select, the `specDraftGB` size input below it and the
+  `autoMtp` state line — it was moved out of the Speculative
   Decoding / MTP section of the Model panel so the spec choice is visible right next
   to where the MTP head is placed. The `noMmprojOffload` checkbox sits in the
   Image Layer (vision) card (below the Loc row). The `batchSize` / `ubatchSize` inputs sit at the
   top of the Overheads & Factors card. All of these were moved out of the
-  Model & Server / Advanced panels so the user sees them in context. (The MTP Head
-  card is the placement area for the MTP head: `specType` select, a Loc row showing
-  it is always in VRAM when a spec type is active, and the `autoMtp` estimate.)
+  Model & Server / Advanced panels so the user sees them in context. (The Speculative
+  Drafter card is the placement area for the drafter: `specType` select (first option
+  `none` = default, no separate empty/placeholder option), the `specDraftGB` size row,
+  and the `autoMtp` estimate — the drafter is always fully in VRAM when a spec type
+  is active, so there is no Loc row.)
 - **Area appearance is defined once, in the `AREAS` table at the top of
   `logic_memory.js`** (`short` = inline segment label, `cls` = CSS class,
   `legend` = legend label). The same `cls` is used for the bar segment
@@ -221,7 +230,7 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   no separate `.mem-legend .swatch.<area>` color rules. There is **no separate
   legend order**: the `BAR_ORDER` array in `logic_memory.js` is the single
   order shared by the VRAM bar, the RAM bar, and the legend (OS, Scratch,
-  cuBLAS, UBatch, Model, MoE, Other, KV, Drafter, IMG, Batch). Bar tooltips use the
+  cuBLAS, UBatch, Batch, Model, MoE, Other, KV, Drafter, IMG). Bar tooltips use the
   `legend` text (not the raw key or `short` label) followed by an "in VRAM" /
   "in RAM" postfix and the GB amount (e.g. "Model in VRAM: 12.3 GB").
 - **`noKvOffload` interaction:** when `--no-kv-offload` is checked, the KV cache is
@@ -323,13 +332,13 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   the input has `min="0"` but users can still type negative values, and `num()` returns
   them raw. Never read `num("ncpuMoe")` without clamping (`moeSync` additionally
   clamps it to `0…moeExperts`). It no longer drives `--cpu-moe` — a positive count
-  emits `--ncpu-moe N`, and `--cpu-moe` comes from the `cpuMoe` checkbox (never both).
+  emits `--n-cpu-moe N`, and `--cpu-moe` comes from the `cpuMoe` checkbox (never both).
 - **Expert count known ⇒ slider ⇄ `ncpuMoe` sync (`moeSync(from)` in logic.js):**
   as soon as `moeExperts > 0`, the MoE slider is re-based to `0…n, step 1` and
   **reads as the number of experts in VRAM** (`gpu = n − cpu`), because experts are
   discrete and a % scale cannot express "12 of 48"; `estMoePctVal` shows
   `36 of 48 experts in VRAM (75%)` instead of a percent, and the `autoMoe` line below
-  states the size and what the CPU share costs (`11.5 GB · 12 on CPU (--ncpu-moe)`).
+  states the size and what the CPU share costs (`11.5 GB · 12 on CPU (--n-cpu-moe)`).
   **Three controls, one state.** Each pass has exactly one source and rewrites the
   others (counts clamped to `0…n`), so they can never disagree:
 
@@ -341,7 +350,7 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 
   Clearing `moeExperts` converts the position back to the nearest 5 % and restores
   `min/max/step = 0/100/5`; `ncpuMoe` is then simply left alone (no total to divide by,
-  so it cannot be mirrored in the slider — it still emits `-ncpu-moe N` on the command
+  so it cannot be mirrored in the slider — it still emits `--n-cpu-moe N` on the command
   line), i.e. **nothing in the card is ever disabled**. `MemEst.moeVramShare()` reads the
   same convention (`value / n` when the count is known) — **keep the two in step**.
   `bindEvents` calls `moeSync` for `estMoePct`, `cpuMoe`, `ncpuMoe` and `moeExperts`;

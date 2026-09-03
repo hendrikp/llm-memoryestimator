@@ -133,10 +133,10 @@
         if (!isAtLld("ngl")) args.push(arg("--n-gpu-layers", gv("ngl")));
         // MoE expert placement: --cpu-moe (all MoE weights in CPU RAM) is a
         // switch driven by the cpuMoe checkbox (logic.js keeps it checked
-        // exactly while the MoE VRAM slider sits at 0); --ncpu-moe N keeps a
+        // exactly while the MoE VRAM slider sits at 0); --n-cpu-moe N keeps a
         // partial count and is meaningless once every expert is on the CPU.
         if (ck("cpuMoe")) args.push("--cpu-moe");
-        else if (Math.max(0, num("ncpuMoe") || 0) > 0) args.push(arg("--ncpu-moe", gv("ncpuMoe")));
+        else if (Math.max(0, num("ncpuMoe") || 0) > 0) args.push(arg("--n-cpu-moe", gv("ncpuMoe")));
         if (ck("flashAttn")) args.push(arg("--flash-attn", "on"));
         if (!isAtLld("cacheK")) args.push(arg("--cache-type-k", gv("cacheK")));
         if (!isAtLld("cacheV")) args.push(arg("--cache-type-v", gv("cacheV")));

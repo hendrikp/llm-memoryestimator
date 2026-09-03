@@ -48,7 +48,7 @@
         "modelAlias": "",           // --alias: unset (also drives the memory estimate)
         "ctxSize": "",              // -c: 0 = loaded from model
         "ngl": "",                  // -ngl: auto
-        "ncpuMoe": "0",             // -ncpu-moe: 0
+        "ncpuMoe": "0",             // --n-cpu-moe: 0
         "cpuMoe": false,            // --cpu-moe: off (tool forces it on at MoE VRAM 0 %)
         "threads": "",              // -t: -1 = auto
         "loadMode": "auto",         // -lm: auto
@@ -88,12 +88,13 @@
         "reasoningBudget": "",      // --reasoning-budget: -1 unrestricted
         "reasoningPreserve": false, // template default (off unless template enables)
         "chatKwargs": "",           // --chat-template-kwargs: unset
-        "specType": "",             // --spec-type: none
+        "specType": "",             // --spec-type: none (the select spells this "none"; see LLAMA_CPP_DEFAULT_UNSET)
         "draftModel": "",           // -md: unused
         "specDraftNMax": "3",       // --spec-draft-n-max: 3
         "specDraftPMin": "0",       // --spec-draft-p-min: 0.00
         "specTypeK": "",            // draft KV types: unset here (server default f16)
         "specTypeV": "",
+        "specDraftGB": "0",         // tool: drafter size in GB (0 = estimate from the model name)
         // Tool-side memory-estimator factors (no server-flag equivalents) —
         // kept in this table so every estimator fallback exists exactly once.
         "moeExperts": "0",          // tool: total expert count (0 = derive from name)
@@ -113,6 +114,7 @@
     // 0 (tool convention) and -1 (llama.cpp) both mean "no limit"; seed /
     // reasoningBudget likewise spell their default as -1.
     global.LLAMA_CPP_DEFAULT_UNSET = {
+        specType: ["none"],   // the select has no empty option; "none" is the unset spelling
         maxTokens: ["0", "-1"],
         seed: ["-1"],
         reasoningBudget: ["-1"]
@@ -167,18 +169,19 @@
         "reasoningBudget": "--reasoning-budget N — token budget for thinking: -1 unrestricted (default) | 0 immediate end | N>0 budget",
         "reasoningPreserve": "--reasoning-preserve — preserve reasoning trace in the full history, not just the last assistant message (default: template default)",
         "chatKwargs": "--chat-template-kwargs STRING — additional params for the json template parser, must be a valid json object string, e.g. {\"key1\":\"value1\"}",
-        "specType": "--spec-type TYPE — speculative decoding type(s): none (default), draft-simple, draft-eagle3, draft-mtp, draft-dflash, draft-dspark, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache; the drafter takes VRAM only while a type other than none is selected",
+        "specType": "--spec-type TYPE — speculative decoding type(s): none (default), draft-simple, draft-eagle3, draft-mtp, draft-dflash, draft-dspark, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache; the drafter takes VRAM only while a type other than none is selected (its size: see the GB field)",
+        "specDraftGB": "tool: size of the speculative drafter in GB used by the memory estimator — counts as a VRAM area while a spec type other than none is selected; 0 = estimate from the model name (≈ 5% of the active weights for MTP models) instead",
         "draftModel": "-md, --model-draft FNAME — draft model for speculative decoding (default: unused)",
         "specDraftNMax": "--spec-draft-n-max N — number of tokens to draft for speculative decoding (default: 3)",
         "specDraftPMin": "--spec-draft-p-min P — minimum speculative decoding probability (greedy) (default: 0.00)",
         "specTypeK": "-ctkd, --cache-type-k-draft TYPE — KV cache data type for K for the draft model (default: f16)",
         "specTypeV": "-ctvd, --cache-type-v-draft TYPE — KV cache data type for V for the draft model (default: f16)",
         "estLayersPct": "tool: VRAM/RAM split of the non-MoE layers area (memory estimator only)",
-        "moeExperts": "tool: total number of experts in the model — together with the per-expert size this is what makes the expert area (and therefore -ncpu-moe / --cpu-moe) computable; while > 0 the MoE VRAM slider is re-based to 0…n (experts in VRAM) and kept in sync with -ncpu-moe; 0 = estimate from the model name instead",
+        "moeExperts": "tool: total number of experts in the model — together with the per-expert size this is what makes the expert area (and therefore --n-cpu-moe / --cpu-moe) computable; while > 0 the MoE VRAM slider is re-based to 0…n (experts in VRAM) and kept in sync with --n-cpu-moe; 0 = estimate from the model name instead",
         "moeExpertGB": "tool: size of ONE expert in GB (quantised) — experts area = n x this; 0 = estimate from the model name instead",
         "sysSsdManual": "tool: disk space reserved for llama.cpp in GB — capacity of the SSD bar; the 'other layers' area spills onto it (nothing about disk can be detected from the browser, so this is typed in)",
         "estOtherPct": "tool: placement of the 'other layers' area — sized as model size − main layers − experts (ngram/embedding tensors): +100 = all VRAM, 0 = all RAM, −100 = all on SSD; offloading fills RAM first and only then spills to disk (memory estimator only)",
-        "estMoePct": "tool: VRAM/RAM split of the MoE experts area — while the expert count is known the slider reads experts in VRAM (0…n) instead of a percent and stays in sync with -ncpu-moe (memory estimator only)",
+        "estMoePct": "tool: VRAM/RAM split of the MoE experts area — while the expert count is known the slider reads experts in VRAM (0…n) instead of a percent and stays in sync with --n-cpu-moe (memory estimator only)",
         "estCtxPct": "tool: VRAM/RAM split of the KV cache area (memory estimator only)",
         "estImgLoc": "tool: placement of the image/mmproj area, VRAM or RAM (memory estimator only)",
         "osOverhead": "tool: OS / driver VRAM overhead in GB shown on the memory bar (not a server flag)",
@@ -234,12 +237,13 @@
             "reasoningBudget": "1024",
             "reasoningPreserve": true,
             "chatKwargs": "{\"reasoning_effort\":\"medium\"}",
-            "specType": "",
+            "specType": "none",     // the select has no empty option — "none" is spelled explicitly
             "draftModel": "",
             "specDraftNMax": "6",
             "specDraftPMin": "0.75",
             "specTypeK": "",
             "specTypeV": "",
+            "specDraftGB": "0",
             "estLayersPct": "100",
             "moeExperts": "0",
             "moeExpertGB": "0",
@@ -266,10 +270,11 @@
             for (k in d) p[k] = d[k];
             // Selects cannot render a watermark, so they keep their default
             // option selected (the HTML lists the default first: loadMode
-            // auto, cacheK/cacheV f16, specType — none —, estImgLoc VRAM,
+            // auto, cacheK/cacheV f16, specType none, estImgLoc VRAM,
             // lazyMode auto — snapped by lazyGate). Only the gated selects
             // are emptied here when the empty value has an option.
             p.loadMode = "auto";      // -lm auto
+            p.specType = "none";      // --spec-type none (unset spelling; never emitted)
             p.cacheK = "f16"; p.cacheV = "f16";
             p.threads = ""; p.parallel = ""; p.ctxSize = ""; p.ngl = "";
             p.host = ""; p.port = ""; // 127.0.0.1 / 8080 watermarks (bind addr is per-machine, always emitted when set)

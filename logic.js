@@ -302,7 +302,7 @@
         "temp", "topP", "topK", "minP", "presPen", "repPen", "freqPen", "repLastN",
         "maxTokens", "seed", "grammarFile",
         "reasoningBudget", "reasoningPreserve", "chatKwargs",
-        "specType", "draftModel", "specDraftNMax", "specDraftPMin", "specTypeK", "specTypeV",
+        "specType", "draftModel", "specDraftNMax", "specDraftPMin", "specTypeK", "specTypeV", "specDraftGB",
         "sysGpuArchManual", "sysVramManual", "sysRamManual", "sysSsdManual",
         "estLayersPct", "estMoePct", "estOtherPct", "estCtxPct", "estImgLoc",
         "osOverhead", "cublasOverhead", "scratchFactor"
@@ -325,7 +325,13 @@
             var e = el(id);
             if (!e || !(id in state)) return;
             if (e.type === "checkbox") e.checked = !!state[id];
-            else e.value = state[id];
+            else {
+                e.value = state[id];
+                // A select assigned a value it has no option for (e.g. an old
+                // saved preset carrying the removed empty specType) would show
+                // blank — snap it back to the default (first) option.
+                if (e.tagName === "SELECT" && e.selectedIndex === -1) e.selectedIndex = 0;
+            }
         });
     }
 
@@ -387,7 +393,7 @@
     }
 
     // MoE placement: once the expert count (`moeExperts`) is known, the VRAM
-    // slider and the `-ncpu-moe` count are two spellings of the same thing, so
+    // slider and the `--n-cpu-moe` count are two spellings of the same thing, so
     // the slider is re-based to 0…n and **reads as the number of experts in
     // VRAM** (left-to-right stays "in VRAM" like every other slider, and
     // experts are discrete, so a percent scale would only obscure it):
@@ -408,7 +414,7 @@
     }
 
     // Three controls, one state: the `cpuMoe` switch (--cpu-moe = every expert in
-    // CPU RAM), the `ncpuMoe` count (-ncpu-moe N) and the VRAM slider. Invariant:
+    // CPU RAM), the `ncpuMoe` count (--n-cpu-moe N) and the VRAM slider. Invariant:
     // **checked ⇔ cpu == n** (all experts on the CPU, i.e. the slider at its
     // minimum). Checking the box pulls the slider to the minimum and fills the
     // count; unchecking it pushes exactly one expert back to the GPU (otherwise
@@ -458,7 +464,7 @@
             }
             // ncpuMoe is left alone here: with no total there is nothing to divide
             // by, so it cannot be reflected in the slider — it still flows to the
-            // command line as -ncpu-moe N (see CmdGen.buildArgs), which is why the
+            // command line as --n-cpu-moe N (see CmdGen.buildArgs), which is why the
             // field stays enabled instead of being zeroed or locked.
         }
         cpuMoeReflect();
@@ -478,7 +484,7 @@
     // estImgLoc select must be re-enabled/snapped here.
     function syncGates() {
         lazyGate();
-        moeSync("gate");      // rebases the MoE slider + mirrors ncpu-moe
+        moeSync("gate");      // rebases the MoE slider + mirrors n-cpu-moe
         var slider = el("estCtxPct");
         slider.disabled = ck("noKvOffload");
         if (ck("noKvOffload")) slider.value = "0";
