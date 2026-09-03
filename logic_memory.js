@@ -101,6 +101,29 @@
         var activeGB = (model.isMoE ? model.activeB : model.totalB) * bytes;
         var moeGB = model.isMoE ? Math.max(0, totalGB - activeGB) : 0;
 
+        // Expert geometry from the MoE card. `-ncpu-moe N` / `--cpu-moe` and the
+        // MoE placement slider can only be costed when the total expert count
+        // and the size of ONE expert are known: with both filled in, the experts
+        // area is exactly n × size and `cpu` costs N × size. With either empty
+        // the area falls back to the name-derived remainder above (order of
+        // magnitude only). "0" counts as unset here — per-model geometry cannot
+        // be a real default.
+        var expertCount = Math.max(0, parseInt(gv("moeExperts"), 10) || 0);
+        var expertSize = Math.max(0, parseFloat(gv("moeExpertGB")) || 0);
+        var expertSized = expertCount > 0 && expertSize > 0;
+        if (expertSized) moeGB = expertCount * expertSize;
+        // Experts kept in CPU RAM: --cpu-moe means "all of them", otherwise the
+        // -ncpu-moe count (clamped to the model's expert count).
+        var cpuExperts = ck("cpuMoe") ? expertCount
+            : Math.max(0, Math.min(expertCount, parseInt(gv("ncpuMoe"), 10) || 0));
+
+        // Whatever the model file still accounts for once the main (active)
+        // layers and the experts are subtracted is other model tensors —
+        // per-layer ngram / embedding buffers. Only measurable when the experts
+        // are sized explicitly; with the name-derived experts remainder the
+        // subtraction would always be 0 by construction.
+        var otherGB = expertSized ? Math.max(0, totalGB - activeGB - moeGB) : 0;
+
         // Empty ctxSize = "loaded from model" (llamacpp default, unknown) →
         // the KV area simply stays 0 until the user sets a number.
         var ctx = parseInt(gv("ctxSize")) || 0;
@@ -122,8 +145,15 @@
             totalB: model.totalB,
             activeB: model.activeB,
             isMoE: model.isMoE,
+            totalGB: totalGB,
+            bytesPerWeight: bytes,
+            expertCount: expertCount,
+            expertSize: expertSize,
+            expertSized: expertSized,
+            cpuExperts: cpuExperts,
             layers: { vram: activeGB, ram: 0 },
             moe: { vram: moeGB, ram: 0 },
+            other: { vram: otherGB, ram: 0 },
             ctx: { vram: ctxGB, ram: 0 },
             mtp: { vram: mtpGB, ram: 0 },
             img: { vram: imgGB, ram: 0 }
@@ -151,6 +181,7 @@
     var AREAS = {
         layers:  { short: "MODEL",  cls: "layers", legend: "Model" },
         moe:     { short: "MOE",    cls: "moe",    legend: "MoE Experts" },
+        other:   { short: "OTHER",  cls: "other",  legend: "Other layers (ngram)" },
         ctx:     { short: "KV",     cls: "ctx",    legend: "KV Cache" },
         mtp:     { short: "Drafter",cls: "mtp",    legend: "Drafter (spec)" },
         img:     { short: "IMG",    cls: "img",    legend: "Image proj." },
@@ -162,7 +193,7 @@
     };
     // Single order shared by the bars and the legend: segments appear in the
     // same order in the VRAM bar, the RAM bar, and the legend below them.
-    var BAR_ORDER = ["os", "scratch", "cublas", "ubatch", "layers", "moe", "ctx", "mtp", "img", "batch"];
+    var BAR_ORDER = ["os", "scratch", "cublas", "ubatch", "layers", "moe", "other", "ctx", "mtp", "img", "batch"];
 
     function makeSwatch(cls) {
         // Carries the `mem-seg <cls>` classes so the swatch picks up the exact
@@ -207,10 +238,35 @@
             var t = a.vram + a.ram;
             return { vram: t * p, ram: t * (1 - p) };
         }
+        // MoE VRAM share, honoring the rebased slider: while the expert count is
+        // known, logic.js (moeSync) keeps estMoePct on a 0…n scale reading
+        // "experts in VRAM", so the share is value / n — otherwise it is a plain
+        // percentage. Keep in sync with moeSync() in logic.js.
+        function moeVramShare(auto) {
+            if (auto.expertCount > 0) {
+                var v = parseFloat(gv("estMoePct"));
+                if (isNaN(v)) v = 0;
+                return Math.max(0, Math.min(1, v / auto.expertCount));
+            }
+            return pct("estMoePct");
+        }
+
+        // Three-stage placement (used by the "other layers" area): +100…0 walks
+        // VRAM→RAM, 0…−100 walks RAM→SSD. Offloading therefore fills RAM first and
+        // only spills to disk once nothing is left in RAM — it never jumps straight
+        // from VRAM to SSD.
+        function threeWay(a, p) {
+            var t = a.vram + a.ram;
+            p = Math.max(-100, Math.min(100, isNaN(p) ? 100 : p));
+            var v = Math.max(0, p) / 100;   // share resident in VRAM
+            var s = Math.max(0, -p) / 100;  // share on SSD (disk-backed)
+            return { vram: t * v, ram: t * (1 - v - s), ssd: t * s };
+        }
 
         var areas = {
             layers: split(auto.layers, pct("estLayersPct")),
-            moe: split(auto.moe, pct("estMoePct")),
+            moe: split(auto.moe, moeVramShare(auto)),
+            other: threeWay(auto.other, gvNum("estOtherPct")),
             ctx: split(auto.ctx, ck("noKvOffload") ? 0 : pct("estCtxPct")),
             mtp: { vram: auto.mtp.vram + auto.mtp.ram, ram: 0 }, // Drafter always in VRAM
             img: (gv("estImgLoc") === "ram" || ck("noMmprojOffload"))
@@ -218,21 +274,35 @@
                 : { vram: auto.img.vram + auto.img.ram, ram: 0 }
         };
 
-        var vramUsed = 0, ramUsed = 0;
+        var vramUsed = 0, ramUsed = 0, ssdUsed = 0;
         Object.keys(areas).forEach(function(k) {
             vramUsed += areas[k].vram;
             ramUsed += areas[k].ram;
+            ssdUsed += areas[k].ssd || 0;   // only the three-stage areas have one
         });
 
         var vramCap = getCap("sysVramManual", 16);
         var ramCap = getCap("sysRamManual", 64);
+        // Third tier: the disk space the user reserved for llama.cpp (model files,
+        // KV/prompt caches, anything offloaded to SSD). Same bar treatment as the
+        // other two; nothing but the `other` area currently lands here.
+        var ssdCap = getCap("sysSsdManual", 100);
 
         // Reserve slices of VRAM for OS/driver, llama.cpp scratchpad, cuBLAS
         // workspace, and compute buffers. OS and cuBLAS are constant but
         // user-overridable (osOverhead / cublasOverhead inputs).
         var osVram = getCap("osOverhead");             // GB – OS / driver (default from LLAMA_CPP_DEFAULTS)
-        var scratchFactor = getCap("scratchFactor");   // GB per PB – scratchpad scale
-        var scratchVram = scratchFactor * (auto.totalB || 0); // GB – llama.cpp scratchpad
+        var scratchFactor = getCap("scratchFactor");   // GB per B params – scratchpad scale
+        // Scratchpad scales with the weights that are actually resident in VRAM —
+        // the main (non-MoE) layers plus the MoE experts placed there — not with
+        // the whole model: weights streamed from RAM don't get evaluated, so they
+        // need no compute buffer. The GB in the two areas are converted back to a
+        // param count with the quant's bytes/weight, so the factor keeps the same
+        // meaning as the old "× totalB" form (dense model fully offloaded ⇒ the
+        // same value as before).
+        var vramWeightsGB = areas.layers.vram + areas.moe.vram;
+        var vramWeightsB = vramWeightsGB / (auto.bytesPerWeight || 0.5); // billions of params
+        var scratchVram = scratchFactor * vramWeightsB;                  // GB – llama.cpp scratchpad
         var cublasVram = getCap("cublasOverhead");     // GB – cuBLAS workspace
         var batchSize = gvNum("batchSize");             // empty → llama.cpp default (-b)
         var ubatchSize = gvNum("ubatchSize");           // empty → llama.cpp default (-ub)
@@ -246,11 +316,14 @@
 
         var vScale = Math.max(vramCap, vramUsed, 0.001);
         var rScale = Math.max(ramCap, ramUsed, 0.001);
+        var sScale = Math.max(ssdCap, ssdUsed, 0.001);
 
         var vBar = el("memBarVram");
         var rBar = el("memBarRam");
+        var sBar = el("memBarSsd");
         vBar.innerHTML = "";
         rBar.innerHTML = "";
+        if (sBar) sBar.innerHTML = "";
 
         function makeSeg(bar, gb, scale, cls, label, title) {
             var pct = gb / scale * 100;
@@ -267,11 +340,21 @@
         // Per-area tooltip details (the legend text is prepended to the title below).
         var details = {
             os: "overridable",
-            scratch: scratchFactor.toFixed(2) + "×" + (auto.totalB || 0) + "B",
+            scratch: scratchFactor.toFixed(3) + "×" + vramWeightsB.toFixed(1) + "B in VRAM (of " + (auto.totalB || 0) + "B)",
             cublas: "overridable",
             ubatch: "ubatch " + ubatchSize,
             batch: "batch " + batchSize + ", always in RAM"
         };
+        // Model areas: say where the size came from, and what the CPU-expert
+        // count costs when the expert geometry is known.
+        details.moe = auto.expertSized
+            ? (auto.expertCount + " experts \u00d7 " + auto.expertSize + " GB"
+               + (ck("cpuMoe") ? ", all on CPU (--cpu-moe)"
+                  : auto.cpuExperts > 0 ? ", " + auto.cpuExperts + " on CPU (--ncpu-moe)" : ", all on GPU"))
+            : "estimated from the model name";
+        details.other = auto.expertSized
+            ? (auto.totalGB.toFixed(1) + " GB model \u2212 main layers \u2212 experts")
+            : "set the expert count + size to measure this";
         // Resolve the GB amounts for every area, for both destinations.
         function segGB(k) {
             if (k in areas) return areas[k];
@@ -281,7 +364,7 @@
                 case "cublas":  return { vram: cublasVram, ram: 0 };
                 case "ubatch":  return { vram: bufVram, ram: 0 };
                 case "batch":   return { vram: 0, ram: batchRam };
-                default:        return { vram: 0, ram: 0 };
+                default:        return { vram: 0, ram: 0, ssd: 0 };
             }
         }
         // Both bars and the legend follow BAR_ORDER, so the segment order in
@@ -296,6 +379,9 @@
             if (s.ram > 0.001) {
                 makeSeg(rBar, s.ram, rScale, a.cls, a.short, a.legend + " in RAM: " + s.ram.toFixed(1) + " GB" + extra);
             }
+            if (sBar && s.ssd > 0.001) {
+                makeSeg(sBar, s.ssd, sScale, a.cls, a.short, a.legend + " on SSD: " + s.ssd.toFixed(1) + " GB" + extra);
+            }
         });
 
         var vFree = Math.max(0, vScale - vramUsed);
@@ -305,6 +391,10 @@
         var rFree = Math.max(0, rScale - ramUsed);
         if (rFree > 0.001) {
             makeSeg(rBar, rFree, rScale, "empty", "free", "RAM headroom: " + rFree.toFixed(1) + " GB");
+        }
+        var sFree = Math.max(0, sScale - ssdUsed);
+        if (sBar && sFree > 0.001) {
+            makeSeg(sBar, sFree, sScale, "empty", "free", "SSD headroom: " + sFree.toFixed(1) + " GB");
         }
 
         // Striped red overlay on the part of a bar that exceeds its capacity.
@@ -319,11 +409,18 @@
         }
         addOverOverlay(vBar, vramUsed, vScale, vramCap, "VRAM");
         addOverOverlay(rBar, ramUsed, rScale, ramCap, "RAM");
+        if (sBar) addOverOverlay(sBar, ssdUsed, sScale, ssdCap, "SSD");
 
         var vOver = vramUsed > vramCap;
         var rOver = ramUsed > ramCap;
         el("memVramCap").innerHTML = "VRAM: " + vramUsed.toFixed(1) + " / " + vramCap + " GB" + (vOver ? ' <span class="over">OVER</span>' : "");
         el("memRamCap").innerHTML = "RAM: " + ramUsed.toFixed(1) + " / " + ramCap + " GB" + (rOver ? ' <span class="over">OVER</span>' : "");
+        // Third tier readout (only when the bar exists).
+        var elSsdCap = el("memSsdCap");
+        if (elSsdCap) {
+            elSsdCap.innerHTML = "SSD: " + ssdUsed.toFixed(1) + " / " + ssdCap + " GB"
+                + (ssdUsed > ssdCap ? ' <span class="over">OVER</span>' : "");
+        }
 
         var badge = el("memModelBadge");
         if (auto.totalB > 0) {
@@ -335,7 +432,27 @@
         }
 
         el("autoLayers").textContent = (auto.layers.vram + auto.layers.ram).toFixed(1) + " GB";
-        el("autoMoe").textContent = (auto.moe.vram + auto.moe.ram).toFixed(1) + " GB";
+        // MoE card readout: total GB plus the gpu/cpu split of the experts when
+        // their count is known (the same numbers the slider and the cpu field
+        // are synced to).
+        var moeTxt = (auto.moe.vram + auto.moe.ram).toFixed(1) + " GB";
+        if (auto.expertCount > 0) {
+            moeTxt += auto.cpuExperts > 0
+                ? " \u00b7 " + auto.cpuExperts + " on CPU ("
+                  + (ck("cpuMoe") ? "--cpu-moe" : "--ncpu-moe") + ")"
+                : " \u00b7 all on GPU";
+        }
+        el("autoMoe").textContent = moeTxt;
+        // "VRAM 60% / RAM 40% / SSD ..." — non-zero tiers only.
+        function tierText(a) {
+            var p = [], parts = [["VRAM", a.vram], ["RAM", a.ram], ["SSD", a.ssd || 0]];
+            parts.forEach(function(x) {
+                if (x[1] > 0.0005) p.push(x[0] + " " + Math.round(x[1] / (a.vram + a.ram + (a.ssd || 0)) * 100) + "%");
+            });
+            return p.length ? " \u00b7 " + p.join(" / ") : "";
+        }
+        el("autoOther").textContent = (auto.other.vram + auto.other.ram + (auto.other.ssd || 0)).toFixed(1)
+            + " GB" + tierText(areas.other);
         el("autoCtx").textContent = (auto.ctx.vram + auto.ctx.ram).toFixed(1) + " GB";
         // Show the context length (in tokens) that corresponds to the VRAM share
         // of the KV cache — handy for reducing ctxSize so it fully fits in VRAM.
@@ -343,13 +460,34 @@
         var ctxTotalGB = auto.ctx.vram + auto.ctx.ram;
         var ctxTokensInVram = ctxTotalGB > 0.0001 ? Math.round(ctxTokens * (areas.ctx.vram / ctxTotalGB)) : 0;
         el("ctxVramAmt").textContent = "\u2192 " + ctxTokensInVram.toLocaleString("en-US") + " tokens in VRAM";
-        el("autoMtp").textContent = (auto.mtp.vram + auto.mtp.ram).toFixed(1) + " GB";
+        // Drafter state lives in this readout (its Loc row was dropped): the head
+        // is always in VRAM when a spec type is active.
+        var mtpGB = auto.mtp.vram + auto.mtp.ram;
+        el("autoMtp").textContent = mtpGB.toFixed(1) + " GB" + (mtpGB > 0.0005 ? " \u00b7 VRAM" : " \u00b7 inactive");
         el("autoImg").textContent = (auto.img.vram + auto.img.ram).toFixed(1) + " GB";
 
-        // Keep the slider % readouts in sync.
-        ["estLayersPct", "estMoePct", "estCtxPct"].forEach(function(id) {
-            el(id + "Val").textContent = gv(id) + "%";
+        // Keep the slider readouts in sync. The MoE slider reads a number of
+        // experts (in VRAM) while the expert count is known, plain % otherwise.
+        [["estLayersPct", "%"],
+         ["estCtxPct", "%"]].forEach(function(e) {
+            el(e[0] + "Val").textContent = gv(e[0]) + e[1];
         });
+        // MoE slider: experts in VRAM once the count is known (see moeSync in
+        // logic.js), plain percent otherwise.
+        if (auto.expertCount > 0) {
+            var gpuN = parseFloat(gv("estMoePct"));
+            if (isNaN(gpuN)) gpuN = auto.expertCount;
+            el("estMoePctVal").textContent = gpuN + " of " + auto.expertCount
+                + " experts in VRAM (" + Math.round(gpuN / auto.expertCount * 100) + "%)";
+        } else {
+            el("estMoePctVal").textContent = gv("estMoePct") + "%";
+        }
+        // The "other layers" slider runs −100…+100 (see threeWay): the readout next
+        // to it shows the signed position, the card readout spells the split.
+        var otherP = gvNum("estOtherPct");
+        el("estOtherPctVal").textContent = (otherP > 0 ? "+" : "") + otherP + "%";
+
+
     }
 
     // Only the bar renderer is needed by logic.js; the other functions are

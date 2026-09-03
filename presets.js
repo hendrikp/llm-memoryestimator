@@ -49,6 +49,7 @@
         "ctxSize": "",              // -c: 0 = loaded from model
         "ngl": "",                  // -ngl: auto
         "ncpuMoe": "0",             // -ncpu-moe: 0
+        "cpuMoe": false,            // --cpu-moe: off (tool forces it on at MoE VRAM 0 %)
         "threads": "",              // -t: -1 = auto
         "loadMode": "auto",         // -lm: auto
         "lazyMode": "auto",         // -lzm: auto (tool only emits it with mmap)
@@ -95,8 +96,11 @@
         "specTypeV": "",
         // Tool-side memory-estimator factors (no server-flag equivalents) —
         // kept in this table so every estimator fallback exists exactly once.
+        "moeExperts": "0",          // tool: total expert count (0 = derive from name)
+        "moeExpertGB": "0",         // tool: GB per expert (0 = derive from name)
         "estLayersPct": "100",
         "estMoePct": "100",
+        "estOtherPct": "100",
         "estCtxPct": "100",
         "estImgLoc": "vram",
         "osOverhead": "0.25",
@@ -123,7 +127,8 @@
         "modelAlias": "--alias STRING — model name aliases, comma-separated (to be used by API, env: LLAMA_ARG_ALIAS); tool: drives the memory estimate when set (fallback: filename)",
         "ctxSize": "-c, --ctx-size N — size of the prompt context (default: 0, 0 = loaded from model)",
         "ngl": "-ngl, --gpu-layers N — max. number of layers to store in VRAM: exact number, 'auto', or 'all' (default: auto)",
-        "ncpuMoe": "-ncmoe, --n-cpu-moe N — keep the MoE weights of the first N layers in the CPU; 0 = all on GPU (env: LLAMA_ARG_N_CPU_MOE)",
+        "ncpuMoe": "-ncmoe, --n-cpu-moe N — keep the MoE weights of the first N layers in the CPU; 0 = all on GPU; kept in sync with the MoE placement slider while the expert count is known (clamped to it, supressed by --cpu-moe) (env: LLAMA_ARG_N_CPU_MOE)",
+        "cpuMoe": "--cpu-moe — keep all MoE expert weights in the CPU (env: LLAMA_ARG_CPU_MOE); tool: always toggleable — ticking it moves every expert to the CPU (slider to its minimum, count to the total); moving the slider or lowering the cpu count unticks it",
         "threads": "-t, --threads N — CPU threads during generation (default: -1 = auto)",
         "loadMode": "-lm, --load-mode MODE — model loading mode: auto (mmap unless device lacks it) | none | mmap | mlock | mmap+mlock | dio (default: auto)",
         "lazyMode": "-lzm, --lazy-mode MODE — on-demand reading of certain tensors (e.g. per-layer embeddings): on | auto (on only for tensors > 4 GiB) | off; requires mmap (default: auto)",
@@ -162,19 +167,23 @@
         "reasoningBudget": "--reasoning-budget N — token budget for thinking: -1 unrestricted (default) | 0 immediate end | N>0 budget",
         "reasoningPreserve": "--reasoning-preserve — preserve reasoning trace in the full history, not just the last assistant message (default: template default)",
         "chatKwargs": "--chat-template-kwargs STRING — additional params for the json template parser, must be a valid json object string, e.g. {\"key1\":\"value1\"}",
-        "specType": "--spec-type TYPE — speculative decoding type(s): none (default), draft-simple, draft-eagle3, draft-mtp, draft-dflash, draft-dspark, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache",
+        "specType": "--spec-type TYPE — speculative decoding type(s): none (default), draft-simple, draft-eagle3, draft-mtp, draft-dflash, draft-dspark, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache; the drafter takes VRAM only while a type other than none is selected",
         "draftModel": "-md, --model-draft FNAME — draft model for speculative decoding (default: unused)",
         "specDraftNMax": "--spec-draft-n-max N — number of tokens to draft for speculative decoding (default: 3)",
         "specDraftPMin": "--spec-draft-p-min P — minimum speculative decoding probability (greedy) (default: 0.00)",
         "specTypeK": "-ctkd, --cache-type-k-draft TYPE — KV cache data type for K for the draft model (default: f16)",
         "specTypeV": "-ctvd, --cache-type-v-draft TYPE — KV cache data type for V for the draft model (default: f16)",
         "estLayersPct": "tool: VRAM/RAM split of the non-MoE layers area (memory estimator only)",
-        "estMoePct": "tool: VRAM/RAM split of the MoE experts area (memory estimator only)",
+        "moeExperts": "tool: total number of experts in the model — together with the per-expert size this is what makes the expert area (and therefore -ncpu-moe / --cpu-moe) computable; while > 0 the MoE VRAM slider is re-based to 0…n (experts in VRAM) and kept in sync with -ncpu-moe; 0 = estimate from the model name instead",
+        "moeExpertGB": "tool: size of ONE expert in GB (quantised) — experts area = n x this; 0 = estimate from the model name instead",
+        "sysSsdManual": "tool: disk space reserved for llama.cpp in GB — capacity of the SSD bar; the 'other layers' area spills onto it (nothing about disk can be detected from the browser, so this is typed in)",
+        "estOtherPct": "tool: placement of the 'other layers' area — sized as model size − main layers − experts (ngram/embedding tensors): +100 = all VRAM, 0 = all RAM, −100 = all on SSD; offloading fills RAM first and only then spills to disk (memory estimator only)",
+        "estMoePct": "tool: VRAM/RAM split of the MoE experts area — while the expert count is known the slider reads experts in VRAM (0…n) instead of a percent and stays in sync with -ncpu-moe (memory estimator only)",
         "estCtxPct": "tool: VRAM/RAM split of the KV cache area (memory estimator only)",
         "estImgLoc": "tool: placement of the image/mmproj area, VRAM or RAM (memory estimator only)",
         "osOverhead": "tool: OS / driver VRAM overhead in GB shown on the memory bar (not a server flag)",
         "cublasOverhead": "tool: cuBLAS workspace VRAM overhead in GB shown on the memory bar (not a server flag)",
-        "scratchFactor": "tool: scratchpad factor (GB per B params) used by the memory bar (not a server flag)"
+        "scratchFactor": "tool: scratchpad factor in GB per billion params that are resident in VRAM (main layers + MoE experts) — offloading weights to RAM shrinks the scratchpad (not a server flag)"
     };
 
     global.CONFIG_PRESETS = {
@@ -186,6 +195,7 @@
             "ctxSize": "64000",
             "ngl": "all",
             "ncpuMoe": "0",
+            "cpuMoe": false,
             "threads": "8",
             "loadMode": "mlock",
             "lazyMode": "off",
@@ -231,7 +241,10 @@
             "specTypeK": "",
             "specTypeV": "",
             "estLayersPct": "100",
+            "moeExperts": "0",
+            "moeExpertGB": "0",
             "estMoePct": "100",
+            "estOtherPct": "100",
             "estCtxPct": "100",
             "estImgLoc": "vram",
             "osOverhead": "0.25",

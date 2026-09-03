@@ -294,7 +294,7 @@
     // Presets: collect / apply / save / load.
     // ------------------------------------------------------------------
     var FIELD_IDS = [
-        "modelPath", "modelAlias", "ctxSize", "ngl", "ncpuMoe", "threads", "loadMode", "lazyMode", "cacheK", "cacheV",
+        "modelPath", "modelAlias", "ctxSize", "ngl", "ncpuMoe", "cpuMoe", "moeExperts", "moeExpertGB", "threads", "loadMode", "lazyMode", "cacheK", "cacheV",
         "batchSize", "ubatchSize", "host", "port", "parallel", "mainGpu", "tensorSplit", "overrideTensor",
         "binaryPath", "envVars",
         "flashAttn", "jinja", "noKvOffload", "noMmprojOffload", "promptCache", "promptCachePath", "verbose",
@@ -303,8 +303,8 @@
         "maxTokens", "seed", "grammarFile",
         "reasoningBudget", "reasoningPreserve", "chatKwargs",
         "specType", "draftModel", "specDraftNMax", "specDraftPMin", "specTypeK", "specTypeV",
-        "sysGpuArchManual", "sysVramManual", "sysRamManual",
-        "estLayersPct", "estMoePct", "estCtxPct", "estImgLoc",
+        "sysGpuArchManual", "sysVramManual", "sysRamManual", "sysSsdManual",
+        "estLayersPct", "estMoePct", "estOtherPct", "estCtxPct", "estImgLoc",
         "osOverhead", "cublasOverhead", "scratchFactor"
     ];
 
@@ -386,12 +386,99 @@
         }
     }
 
+    // MoE placement: once the expert count (`moeExperts`) is known, the VRAM
+    // slider and the `-ncpu-moe` count are two spellings of the same thing, so
+    // the slider is re-based to 0…n and **reads as the number of experts in
+    // VRAM** (left-to-right stays "in VRAM" like every other slider, and
+    // experts are discrete, so a percent scale would only obscure it):
+    // gpu = n − cpu. `moeSync(from)` mirrors whichever side the user moved;
+    // with an unknown count the slider falls back to the plain 0–100 % scale
+    // and `estMoePct` keeps being the single source of truth. `moeSliderN` is
+    // the n the slider is currently rebased to (0 = percent scale); MemEst
+    // reads the same convention (`moeVramShare` in logic_memory.js).
+    var moeSliderN = 0;
+
+    function clampInt(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    // Slider position as a CPU-expert count (the slider reads experts **in VRAM**).
+    function moeSliderCpu(n) {
+        var v = parseFloat(el("estMoePct").value);
+        if (isNaN(v)) v = 0;
+        return n - clampInt(Math.round(v), 0, n);
+    }
+
+    // Three controls, one state: the `cpuMoe` switch (--cpu-moe = every expert in
+    // CPU RAM), the `ncpuMoe` count (-ncpu-moe N) and the VRAM slider. Invariant:
+    // **checked ⇔ cpu == n** (all experts on the CPU, i.e. the slider at its
+    // minimum). Checking the box pulls the slider to the minimum and fills the
+    // count; unchecking it pushes exactly one expert back to the GPU (otherwise
+    // cpu would still be n and the box would snap straight back on); moving the
+    // slider or editing the count rewrites the others and clears the box as soon
+    // as the count drops below n. The box is **never disabled** — it is always
+    // free to toggle, `cpuMoeReflect()` just keeps it honest after bulk changes.
+    function moeSync(from) {
+        var slider = el("estMoePct"), cnt = el("ncpuMoe");
+        if (!slider) return;
+        var n = parseInt(gv("moeExperts"), 10);
+        n = isNaN(n) ? 0 : Math.max(0, n);
+        if (n > 0) {
+            // Count known: slider = experts in VRAM (0…n, step 1); both fields are
+            // rewritten on every pass, so they can never disagree.
+            slider.min = "0"; slider.max = String(n); slider.step = "1";
+            moeSliderN = n;
+            var cpu;
+            if (from === "cpuMoe") {
+                // The switch is the source: on = all of them, off = one back on GPU.
+                cpu = ck("cpuMoe") ? n : n - 1;
+            } else if (from === "slider") {
+                cpu = moeSliderCpu(n);          // the slider is the source
+            } else {
+                // `ncpuMoe` edited, expert count (re)entered, or a bulk gate pass:
+                // the count field wins (slider rebases to it).
+                cpu = parseInt(cnt ? cnt.value : "", 10);
+                if (isNaN(cpu)) cpu = moeSliderCpu(n);
+            }
+            cpu = clampInt(isNaN(cpu) ? 0 : cpu, 0, n);
+            if (cnt) cnt.value = String(cpu);   // also clamps what was typed
+            slider.value = String(n - cpu);
+        } else {
+            // Count unknown: plain 0–100 % scale (converting back from the last
+            // rebased position so the placement fraction survives).
+            if (moeSliderN > 0) {
+                var frac = parseFloat(slider.value);
+                var pctBack = isNaN(frac) ? 0 : Math.round((frac / moeSliderN) * 100 / 5) * 5;
+                slider.min = "0"; slider.max = "100"; slider.step = "5";
+                slider.value = String(Math.max(0, Math.min(100, pctBack)));
+                moeSliderN = 0;
+            }
+            if (from === "cpuMoe" && !ck("cpuMoe") && parseFloat(slider.value) === 0) {
+                // No expert count to count with, so "one step back to the GPU" is
+                // one slider step (5 %) — otherwise the switch could never come off.
+                slider.value = "5";
+            }
+            // ncpuMoe is left alone here: with no total there is nothing to divide
+            // by, so it cannot be reflected in the slider — it still flows to the
+            // command line as -ncpu-moe N (see CmdGen.buildArgs), which is why the
+            // field stays enabled instead of being zeroed or locked.
+        }
+        cpuMoeReflect();
+    }
+
+    // Keep the switch equal to "everything is on the CPU" — slider at its minimum
+    // (0 experts in VRAM, or 0 % when the count is unknown). Never touches
+    // `disabled`: the box stays clickable in every state.
+    function cpuMoeReflect() {
+        var cb = el("cpuMoe");
+        if (cb) cb.checked = parseFloat(gv("estMoePct")) === 0;
+    }
+
     // Re-sync all dependent-control gates after a bulk state change
     // (init / preset apply / preset load / reset / clear) — checkbox
     // handlers don't fire programmatically, so the estCtxPct slider and
     // estImgLoc select must be re-enabled/snapped here.
     function syncGates() {
         lazyGate();
+        moeSync("gate");      // rebases the MoE slider + mirrors ncpu-moe
         var slider = el("estCtxPct");
         slider.disabled = ck("noKvOffload");
         if (ck("noKvOffload")) slider.value = "0";
@@ -404,7 +491,7 @@
     // not restored — they were detected or typed, not part of the preset).
     function resetAll() {
         applyPresetState(DEFAULT_PRESET);
-        ["sysGpuArchManual", "sysVramManual", "sysRamManual"].forEach(function(id) {
+        ["sysGpuArchManual", "sysVramManual", "sysRamManual", "sysSsdManual"].forEach(function(id) {
             if (el(id)) el(id).value = "";
         });
         syncGates();
@@ -444,6 +531,10 @@
                         slider.disabled = false;
                     }
                 }
+                if (ev.target.id === "estMoePct") moeSync("slider");
+                if (ev.target.id === "cpuMoe") moeSync("cpuMoe");
+                if (ev.target.id === "ncpuMoe") moeSync("ncpuMoe");
+                if (ev.target.id === "moeExperts") moeSync("experts");
                 if (ev.target.id === "noMmprojOffload") {
                     var loc = el("estImgLoc");
                     if (ev.target.checked) {

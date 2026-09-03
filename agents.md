@@ -40,6 +40,7 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `CmdGen.buildArgs()` — assembles the ordered arg list + env lines + chat kwargs;
   the single source of truth for what gets emitted. Rules (see the file header):
   **long flag spellings only** (`--threads`, `--model`, `--n-gpu-layers`, `--cpu-moe`,
+  `--ncpu-moe`,
   `--n-predict`, `--grammar-file`, `--model-draft`, …; `--flash-attn` carries the
   explicit value `on`); emission order follows the reference cmd line (model/alias,
   host/port, sampling, jinja/reasoning, slots/threads, ctx/offload/caches/load-mode,
@@ -95,20 +96,47 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `kvBytesFactor(cacheType)` — KV-cache size factor per cache type. Covers all
   `-ctk`/`-ctv` types (`f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`,
   `q5_0`, `q5_1`); unknown values fall back to f16 (2 bytes).
-- `computeEstimates()` — returns per-area `{ vram, ram }` in GB for the five areas:
-  `layers` (non-MoE), `moe` (experts), `ctx` (KV cache), `mtp` (MTP head), `img` (vision).
+- `computeEstimates()` — returns per-area `{ vram, ram }` in GB for the six model areas:
+  `layers` (non-MoE / active params), `moe` (experts), `other` (leftover model tensors,
+  e.g. per-layer ngram/embeddings), `ctx` (KV cache), `mtp` (MTP head), `img` (vision),
+  plus the raw inputs (`totalGB`, `expertCount`, `expertSize`, `expertSized`,
+  `cpuExperts` — `--cpu-moe` implies *all*) that bar tooltips and the card readouts
+  use to explain where a number came from.
+- **Expert geometry drives the MoE area:** `moeExperts` (total expert count) and
+  `moeExpertGB` (size of ONE expert, GB) in the MoE Experts card. With **both** filled
+  in, the experts area is exactly `n × size` (this is what makes `-ncpu-moe N` /
+  `--cpu-moe` and the MoE slider costable), the `autoMoe` readout appends
+  `· C on CPU (--ncpu-moe|--cpu-moe)` (or `· all on GPU`), and the leftover
+  `totalGB − activeGB − n×size` becomes the **other** area (0 when the geometry is not
+  filled in — with name-derived experts the subtraction would be 0 by construction).
+  With either field empty/0 the experts area falls back to the name-derived
+  `total − active` remainder. A positive expert count on a *dense* name (no `-AxB`
+  tag) just adds the expert area on top — the tool cannot infer the active size.
 - VRAM/RAM placement is now controlled by **per-area sliders** (`estLayersPct`,
-  `estMoePct`, `estCtxPct`, 0–100 % to VRAM, default 100): the slider splits the
+  `estMoePct`, `estCtxPct`, 0–100 % to VRAM, default 100; **`estOtherPct` is the
+  exception** — a three-stage −100…+100 scale, see *Three-stage placement* below):
+  the slider splits the
   auto-estimated area size proportionally between VRAM and RAM. The MTP head is
   **always fully in VRAM** (no control) but only when a spec/draft type is selected
   (`specType` non-empty); with spec type "none" it takes **no space**. The
   image/vision layer is **all-or-nothing** via the `estImgLoc` select (`vram` /
   `ram`). The old `placeAreas()` (ngl/ncpu-moe based) and the `est*Vram`/`est*Ram`
-  GB override boxes were removed; `-ngl`/`-ncpu-moe` still affect the generated
-  command line but no longer the memory bars.
+  GB override boxes were removed; `-ngl` still only affects the generated command
+  line, but the MoE expert placement **does** feed the bars: with the expert count
+  known, `-ncpu-moe` and the MoE slider are synced and both drive the experts split —
+  and through it the scratchpad (see the SCR formula below).
 - **Fixed overhead segments on the VRAM bar:** OS/driver (`osOverhead` input,
-  default 0.25 GB), scratchpad SCR = `scratchFactor × totalB` (default factor
-  0.025 GB per PB), cuBLAS workspace (`cublasOverhead` input, default 0.35 GB),
+  default 0.25 GB), scratchpad SCR = `scratchFactor × <params in VRAM>` where the
+  param count is rebuilt from the VRAM side of the two weight areas —
+  `(layers.vram + moe.vram) / bytesPerWeight` (`computeEstimates` returns the quant's
+  bytes/weight as `bytesPerWeight`) — so streaming weights to RAM shrinks the
+  scratchpad instead of leaving it at the full-model value (weights in RAM are never
+  evaluated, so they need no compute buffer; a dense model fully offloaded gives the
+  same number as the old `× totalB` form). Default factor 0.025 GB per B params.
+  Only the two **weight** areas count — `other` (ngram/embedding tensors) is
+  deliberately excluded — and the SCR tooltip shows both numbers
+  (`0.025×7.6B in VRAM (of 27B)`). cuBLAS workspace (`cublasOverhead` input,
+  default 0.35 GB),
   and compute buffers BUF = `(ubatchSize / 1024) × 0.25` GB — the **ubatch** is
   what actually lives on the GPU at once, so the VRAM buffer segment scales with
   `ubatchSize`. In addition, a **BATCH** segment = `(batchSize / 1024) × 0.25` GB
@@ -122,10 +150,57 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   to the VRAM share of the KV cache at the current `estCtxPct` split (e.g.
   `→ 25,600 tokens in VRAM`) — so the user can reduce `ctxSize` to that number
   to make the KV cache fully fit in VRAM.
+- **Three-stage placement for the `other` area (`threeWay()` in `updateMemBar`):**
+  `estOtherPct` runs from **+100 (all VRAM)** through **0 (all RAM)** to **−100 (all
+  on SSD)**: `vram = max(0,p)/100`, `ssd = max(0,−p)/100`, `ram = 1 − vram − ssd`. So
+  offloading fills **RAM first and only then spills to disk** — a direct VRAM→SSD
+  jump is impossible by construction. That is why its area carries a third destination
+  (`{ vram, ram, ssd }`) while every other area stays `{ vram, ram }`: the totals loop
+  adds `areas[k].ssd || 0`, `segGB()` defaults to `ssd: 0`, and the bar renderer
+  ignores the extra key. `autoOther` spells the split (`12.4 GB · VRAM 60% / RAM 40%`)
+  and `estOtherPctVal` the signed slider position (`+60%`, `−40%`).
+- **SSD bar (third tier):** `#memBarSsd` + `#memSsdCap` live in `.mem-rows` under RAM,
+  with a steel label chip (`.mem-row-label.ssd`). Its capacity is the
+  **`sysSsdManual` input in the system panel** (“SSD reserved (GB)”,
+  `getCap("sysSsdManual", 100)` — call-site fallback like the 16/64 GB VRAM/RAM ones,
+  since it is not a server flag); disk size cannot be detected in a browser, so the
+  value is typed and there is no “detected” line for it. The bar gets the identical
+  treatment as the other two: area segments, a `free` headroom segment and the striped
+  over-budget overlay with the `OVER` tag. `sysSsdManual` is in `FIELD_IDS` (saved with
+  presets) and is emptied by `resetAll()` along with the other system inputs. Panel
+  header: “Memory Distribution (VRAM / RAM / SSD)”.
+- **Slider readouts go below the track, never beside it:** the four placement sliders'
+  value elements (`estLayersPctVal`, `estMoePctVal`, `estOtherPctVal`, `estCtxPctVal`)
+  are `<div class="slider-val">` lines *after* the slider row (`.mem-est .row label`
+  is 34 px, so they indent 40 px to line up with the track) — beside the slider they
+  stole width from it, and the slider must have the full card size (the old
+  `.mem-est .row .unit` class is gone). Descriptive readouts may therefore be wordy
+  (`36 of 48 experts in VRAM (75%)`, `+100%`). The sampling sliders (`temp`, `topP`, …)
+  keep their
+  value in the field's label line — that is above the track, not beside it, and costs
+  the slider nothing.
+- **UI convention — state under its own control, descriptions in tooltips:** *state*
+  (the `auto*` estimate lines, `ctxVramAmt`) goes directly below the slider/control it
+  belongs to; purely *descriptive* text goes into that control's
+  `LLAMA_CPP_DESCRIPTIONS` tooltip — never as extra info rows stacked in a card and
+  never as text after the whole slider grid. Removed on those grounds: the
+  “model − layers − experts” size row and the `VRAM · RAM · SSD` hint row in the Other
+  Layers card (both folded into the `estOtherPct` tooltip) and the MTP card's
+  `Loc | VRAM (only when drafter active)` row (in the `specType` tooltip; the state
+  itself is now stated by `autoMtp`: `0.8 GB · VRAM` / `0.0 GB · inactive`).
 - **Layout inside the mem-est grid:** each area card now contains its related controls
-  inline: `ngl` sits above the Model Layers slider; `cacheK`/`cacheV` selects and the
+  inline: `ngl` sits above the Model Layers slider; the MoE Experts card holds the
+  expert geometry (`moeExperts` = n, `moeExpertGB` = size of one expert) above the
+  `ncpuMoe` count, the `cpuMoe` checkbox and the MoE slider — the card carries
+  `.eq-inputs`, which pins the hint column to a fixed 46 px so the three number fields
+  are exactly the same (wider) width; the hints are one word each (`total` / `each` /
+  `experts`) because the flag spellings live in the tooltips; the **Other Layers
+  (ngram, embed)** card holds only the three-stage `estOtherPct` slider (label `loc`)
+  plus its `autoOther` state line — the area size is derived (`model size − layers −
+  experts`, stated in the tooltip), so it has no size input; it sits between the MoE and
+  the KV card; `cacheK`/`cacheV` selects and the
   `noKvOffload` checkbox sit above the KV cache slider; the `specType` select sits in
-  the MTP Head card (above the Loc row) — it was moved out of the Speculative
+  the MTP Head card (its `autoMtp` state line below) — it was moved out of the Speculative
   Decoding / MTP section of the Model panel so the spec choice is visible right next
   to where the MTP head is placed. The `noMmprojOffload` checkbox sits in the
   Image Layer (vision) card (below the Loc row). The `batchSize` / `ubatchSize` inputs sit at the
@@ -140,13 +215,13 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   `mem-seg <cls>` classes), so each area color is defined exactly once in
   `style.css`. Colors are **per-area, not per-destination**: an area looks
   the same in the VRAM and RAM bars (MODEL=blue, MOE=green, KV=cyan,
-  Drafter/mtp=orange, IMG=pink). The legend is **generated** by
+  Drafter/mtp=orange, OTHER=steel grey, IMG=pink). The legend is **generated** by
   `MemEst.buildLegend()` (called once from `init()` in `logic.js`) into
   `#memLegend` — the HTML contains no per-area legend markup, and there are
   no separate `.mem-legend .swatch.<area>` color rules. There is **no separate
   legend order**: the `BAR_ORDER` array in `logic_memory.js` is the single
   order shared by the VRAM bar, the RAM bar, and the legend (OS, Scratch,
-  cuBLAS, UBatch, Model, MoE, KV, Drafter, IMG, Batch). Bar tooltips use the
+  cuBLAS, UBatch, Model, MoE, Other, KV, Drafter, IMG, Batch). Bar tooltips use the
   `legend` text (not the raw key or `short` label) followed by an "in VRAM" /
   "in RAM" postfix and the GB amount (e.g. "Model in VRAM: 12.3 GB").
 - **`noKvOffload` interaction:** when `--no-kv-offload` is checked, the KV cache is
@@ -203,8 +278,9 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
 - `lazyGate()` — disables `lazyMode` and snaps it to `off` unless
   `loadMode === "mmap"`.
 - `syncGates()` — re-syncs **all** dependent controls after a bulk state change
-  (`init`, `resetAll`, `clearAll`, `applyPreset`, `loadPresetFile`): `lazyGate()` plus
-  the `estCtxPct` slider (disable + snap to 0 when `noKvOffload`) and `estImgLoc`
+  (`init`, `resetAll`, `clearAll`, `applyPreset`, `loadPresetFile`): `lazyGate()`,
+  `moeSync("gate")` (rebases the MoE slider, mirrors `ncpuMoe`, then `cpuMoeReflect()`),
+  plus the `estCtxPct` slider (disable + snap to 0 when `noKvOffload`) and `estImgLoc`
   select (disable + snap to `ram` when `noMmprojOffload`) — checkbox change handlers
   don't fire programmatically, so presets must re-apply the gates themselves.
 
@@ -245,7 +321,38 @@ Static site — no build step, no dependencies. Open `configtool.html` in a brow
   tensors to CPU. Both flow into the JSON config via `extra_args` like the other flags.
 - **`ncpuMoe` is clamped to ≥ 0 at every use site** (`buildArgs`, `genJson`):
   the input has `min="0"` but users can still type negative values, and `num()` returns
-  them raw. Never read `num("ncpuMoe")` without clamping.
+  them raw. Never read `num("ncpuMoe")` without clamping (`moeSync` additionally
+  clamps it to `0…moeExperts`). It no longer drives `--cpu-moe` — a positive count
+  emits `--ncpu-moe N`, and `--cpu-moe` comes from the `cpuMoe` checkbox (never both).
+- **Expert count known ⇒ slider ⇄ `ncpuMoe` sync (`moeSync(from)` in logic.js):**
+  as soon as `moeExperts > 0`, the MoE slider is re-based to `0…n, step 1` and
+  **reads as the number of experts in VRAM** (`gpu = n − cpu`), because experts are
+  discrete and a % scale cannot express "12 of 48"; `estMoePctVal` shows
+  `36 of 48 experts in VRAM (75%)` instead of a percent, and the `autoMoe` line below
+  states the size and what the CPU share costs (`11.5 GB · 12 on CPU (--ncpu-moe)`).
+  **Three controls, one state.** Each pass has exactly one source and rewrites the
+  others (counts clamped to `0…n`), so they can never disagree:
+
+  | `from` | source | effect |
+  |---|---|---|
+  | `"slider"` | slider position | `cpu = n − gpu`, count rewritten |
+  | `"ncpuMoe"` / `"experts"` / `"gate"` | count field | slider rebases to `n − cpu` |
+  | `"cpuMoe"` | the switch | on ⇒ `cpu = n` (slider to its minimum); off ⇒ `cpu = n − 1` (one expert back on the GPU, else the box would snap straight back on) |
+
+  Clearing `moeExperts` converts the position back to the nearest 5 % and restores
+  `min/max/step = 0/100/5`; `ncpuMoe` is then simply left alone (no total to divide by,
+  so it cannot be mirrored in the slider — it still emits `-ncpu-moe N` on the command
+  line), i.e. **nothing in the card is ever disabled**. `MemEst.moeVramShare()` reads the
+  same convention (`value / n` when the count is known) — **keep the two in step**.
+  `bindEvents` calls `moeSync` for `estMoePct`, `cpuMoe`, `ncpuMoe` and `moeExperts`;
+  `syncGates` calls it with `"gate"` so presets rebase the slider.
+- **`cpuMoeReflect()` — the `--cpu-moe` box is never disabled:** it is free to toggle
+  in every state and is kept equal to *"everything is on the CPU"* — slider at its
+  minimum (0 experts in VRAM, or 0 % while the count is unknown; unchecking there nudges
+  one slider step, 5 %, to make the switch actually come off). Old `cpuMoeGate()`
+  disabled/forced it, which made it feel dead — do not reintroduce that. The box only
+  ever *sets* the placement (slider → minimum), it is never the thing being clamped;
+  `CmdGen.buildArgs` still reads only the checkbox.
 - **`noKvOffload` gates `estCtxPct`:** checking `--no-kv-offload` disables the
   `estCtxPct` slider and forces the KV split to 100 % RAM (0 % VRAM) in
   `updateMemBar()`. The event handler in `bindEvents` toggles `estCtxPct.disabled`

@@ -8,8 +8,9 @@
 // Rules:
 //  - Long flag spellings only (--threads, never -t).
 //  - Emission order follows the reference cmd line: model/alias, bind
-//    addr, sampling, jinja/reasoning, slots, threads, context & offload,
-//    cache types, load mode, overrides, batch, extras, speculative.
+//    addr, sampling, jinja/reasoning, slots, threads, context & offload
+//    (incl. MoE expert placement), cache types, load mode, overrides,
+//    batch, extras, speculative.
 //  - One option per line in the generated scripts — a flag and its value
 //    always share a line (bat uses " ^", ps1 "`", sh "\" continuations).
 //  - Omission: a tunable option is emitted only when it holds a value
@@ -130,8 +131,12 @@
         // Context, offload & caches (reference order).
         if (!isAtLld("ctxSize")) args.push(arg("--ctx-size", gv("ctxSize")));
         if (!isAtLld("ngl")) args.push(arg("--n-gpu-layers", gv("ngl")));
-        var ncpuMoe = Math.max(0, num("ncpuMoe") || 0);
-        if (ncpuMoe > 0) args.push("--cpu-moe");
+        // MoE expert placement: --cpu-moe (all MoE weights in CPU RAM) is a
+        // switch driven by the cpuMoe checkbox (logic.js keeps it checked
+        // exactly while the MoE VRAM slider sits at 0); --ncpu-moe N keeps a
+        // partial count and is meaningless once every expert is on the CPU.
+        if (ck("cpuMoe")) args.push("--cpu-moe");
+        else if (Math.max(0, num("ncpuMoe") || 0) > 0) args.push(arg("--ncpu-moe", gv("ncpuMoe")));
         if (ck("flashAttn")) args.push(arg("--flash-attn", "on"));
         if (!isAtLld("cacheK")) args.push(arg("--cache-type-k", gv("cacheK")));
         if (!isAtLld("cacheV")) args.push(arg("--cache-type-v", gv("cacheV")));
@@ -232,6 +237,7 @@
             alias: gv("modelAlias") || null,
             context: lldN("ctxSize"),
             gpu_layers: gv("ngl") || null,
+            cpu_moe: ck("cpuMoe"),
             ncpu_moe_experts: Math.max(0, num("ncpuMoe") || 0),
             threads: lldN("threads"),
             server: {

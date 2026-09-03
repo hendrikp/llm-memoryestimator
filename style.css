@@ -136,6 +136,7 @@ header h1 span { color: var(--accent); }
 }
 .mem-row-label.vram { color: var(--accent); background: var(--accent-dim); }
 .mem-row-label.ram { color: var(--green); background: rgba(63, 185, 80, 0.12); }
+.mem-row-label.ssd { color: var(--text-secondary); background: rgba(125, 135, 148, 0.14); }
 .mem-bar {
     display: flex; height: 46px; width: 100%;
     border-radius: var(--radius); overflow: hidden;
@@ -158,6 +159,9 @@ header h1 span { color: var(--accent); }
 .mem-seg.ctx { background: linear-gradient(90deg, #0f6e8c, #22a7d0); }
 .mem-seg.mtp { background: linear-gradient(90deg, #b45309, #e08a2a); }
 .mem-seg.img { background: linear-gradient(90deg, #8a3a8a, #c06ac0); }
+/* Other model tensors (ngram / per-layer embeddings): neutral steel so it
+   reads as "model leftovers" next to the colored main areas. */
+.mem-seg.other { background: linear-gradient(90deg, #4b5563, #7d8794); }
 .mem-seg.empty { background: var(--empty-stripes); color: var(--text-secondary); }
 .mem-seg.os { background: linear-gradient(90deg, #6e4a1f, #9a6a2a); }
 .mem-seg.rt { background: linear-gradient(90deg, #4a3a6e, #6a5a9a); }
@@ -204,8 +208,19 @@ header h1 span { color: var(--accent); }
     border: 1px solid var(--border); border-radius: 4px;
     color: var(--text-primary); font-family: var(--mono); font-size: 0.78rem;
 }
-.mem-est .row .unit { font-size: 0.64rem; color: var(--text-secondary); flex: 0 0 auto; min-width: 44px; text-align: right; }
+/* Slider value readout: on its own line BELOW the track — never beside it, so
+   the slider always gets the full card width. Indented to start at the track. */
+.mem-est .slider-val {
+    font-size: 0.64rem; font-family: var(--mono); color: var(--text-secondary);
+    margin: 3px 0 0 40px; /* label column (34px) + row gap (6px) */
+}
 .mem-est .row .hint-inline { font-size: 0.6rem; color: var(--text-secondary); flex: 0 0 auto; }
+/* Cards whose inputs must all end at the same x (MoE Experts): the hint column
+   gets a fixed width instead of sizing to its text, so every number field has the
+   identical — and noticeably wider — width. Flag spellings live in the tooltips,
+   so the hints stay one short word. */
+.mem-est.eq-inputs .row input[type="number"] { flex: 1 1 0; min-width: 0; }
+.mem-est.eq-inputs .row .hint-inline { flex: 0 0 46px; }
 .mem-est .row.check-row { gap: 6px; }
 .mem-est .row.check-row input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; flex: 0 0 auto; }
 .mem-est .row.check-row label { font-size: 0.72rem; cursor: pointer; width: auto; flex: 1 1 auto; }
